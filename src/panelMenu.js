@@ -28,6 +28,7 @@ class PetPanelIndicator extends PanelMenu.Button {
         onOpenPrefs,
     }) {
         super._init(0.5, 'TopBar Pet Indicator', false);
+        this.add_style_class_name('topbar-pet-panel-btn');
 
         this._extensionPath = extensionPath;
         this._settings = settings;
@@ -45,7 +46,8 @@ class PetPanelIndicator extends PanelMenu.Button {
         ]);
         this._icon = new St.Icon({
             gicon: Gio.icon_new_for_string(iconPath),
-            style_class: 'system-status-icon',
+            style_class: 'system-status-icon topbar-pet-status-icon',
+            icon_size: 15,
         });
         this.add_child(this._icon);
 

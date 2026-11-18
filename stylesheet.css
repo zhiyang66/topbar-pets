@@ -1,5 +1,27 @@
 /* TopBar Pet 2.0 Stylesheet */
 
+/* Compact Top-Bar Status Icon Pill (overrides default wide 12px GNOME/Yaru hpadding) */
+.panel-button.topbar-pet-panel-btn,
+Gjs_topbar-pet_local_gnome-extension_src_panelMenu_PetPanelIndicator.panel-button,
+Gjs_topbar-pet_local_gnome-extension_panelMenu_PetPanelIndicator.panel-button,
+Gjs_PetPanelIndicator.panel-button {
+    -natural-hpadding: 5px;
+    -minimum-hpadding: 4px;
+    padding-left: 5px;
+    padding-right: 5px;
+    margin: 0;
+}
+
+.panel-button.topbar-pet-panel-btn .system-status-icon,
+Gjs_topbar-pet_local_gnome-extension_src_panelMenu_PetPanelIndicator.panel-button .system-status-icon,
+Gjs_topbar-pet_local_gnome-extension_panelMenu_PetPanelIndicator.panel-button .system-status-icon,
+Gjs_PetPanelIndicator.panel-button .system-status-icon,
+.topbar-pet-status-icon {
+    icon-size: 15px;
+    padding: 0;
+    margin: 0;
+}
+
 .topbar-pet-actor {
     background-color: transparent;
 }
