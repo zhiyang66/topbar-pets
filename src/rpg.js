@@ -384,10 +384,12 @@ export class RosterManager {
         const arch = getArchetype(pet.archetype);
         const newlyUnlockedSkills = [];
         let leveledUp = false;
+        let lvGuard = 0;
 
-        while (pet.xp >= xpRequiredForLevel(pet.level)) {
+        while (pet.xp >= xpRequiredForLevel(pet.level) && lvGuard < 50) {
             pet.xp -= xpRequiredForLevel(pet.level);
             pet.level += 1;
+            lvGuard += 1;
             leveledUp = true;
             for (const sk of arch.skills) {
                 if (sk.unlockLv === pet.level)

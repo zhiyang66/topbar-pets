@@ -87,9 +87,9 @@ export class LanManager {
             this._udpSocket.bind(bindAddr, true);
 
             this._udpSource = this._udpSocket.create_source(GLib.IOCondition.IN, null);
+            this._udpSource.set_priority(GLib.PRIORITY_LOW);
             this._udpSource.set_callback(() => {
-                this._drainUdpPackets();
-                return GLib.SOURCE_CONTINUE;
+                return this._drainUdpPackets();
             });
             this._udpSource.attach(null);
         } catch (e) {
@@ -304,14 +304,36 @@ export class LanManager {
 
     _drainUdpPackets() {
         if (!this._udpSocket)
-            return;
-        const buf = new Uint8Array(2048);
-        while (true) {
+            return GLib.SOURCE_REMOVE;
+
+        // Bounded drain loop: never process more than 24 datagrams in a single frame tick
+        for (let pktIdx = 0; pktIdx < 24; pktIdx++) {
+            let gbytes = null;
+            let srcAddr = null;
             try {
-                const [len, srcAddr] = this._udpSocket.receive_from(buf, null);
-                if (len <= 0)
-                    break;
-                const raw = textDecoder.decode(buf.subarray(0, len));
+                [gbytes, srcAddr] = this._udpSocket.receive_bytes_from(2048, 0, null);
+            } catch (sockErr) {
+                if (
+                    sockErr?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.WOULD_BLOCK) ||
+                    sockErr?.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.TIMED_OUT)
+                ) {
+                    return GLib.SOURCE_CONTINUE;
+                }
+                // Fatal / unexpected socket error: detach source immediately so it NEVER spin-locks MainLoop!
+                console.warn('[TopBarPet LAN] Stopping UDP listener due to socket error:', sockErr);
+                this._udpSource = null;
+                try {
+                    this._udpSocket.close();
+                } catch (_e2) {}
+                this._udpSocket = null;
+                return GLib.SOURCE_REMOVE;
+            }
+
+            if (!gbytes || gbytes.get_size() === 0)
+                return GLib.SOURCE_CONTINUE;
+
+            try {
+                const raw = textDecoder.decode(gbytes.get_data());
                 const msg = JSON.parse(raw);
                 if (msg?.magic !== 'TOPBAR_PET_V2' || !msg.peerId || msg.peerId === this.peerId)
                     continue;
@@ -351,11 +373,12 @@ export class LanManager {
                     this._callbacks.onPeerBeacon(peerObj, isNew);
                 if (isNew && this._callbacks.onPeersChanged)
                     this._callbacks.onPeersChanged(this.getOnlinePeers());
-            } catch (_e) {
-                // EWOULDBLOCK when UDP buffer is drained
-                break;
+            } catch (_parseErr) {
+                // Malformed UDP packet already consumed from kernel buffer; safely skip it
             }
         }
+
+        return GLib.SOURCE_CONTINUE;
     }
 
     _pruneStalePeers() {

@@ -9,8 +9,8 @@ function nowTimeStr() {
     return dt ? dt.format('%H:%M') : '';
 }
 
-function extractActorReadableLabel(actor) {
-    if (!actor)
+function extractActorReadableLabel(actor, depth = 0) {
+    if (!actor || depth > 3)
         return '';
     if (actor instanceof St.Label) {
         const t = (actor.text || '').trim();
@@ -22,8 +22,10 @@ function extractActorReadableLabel(actor) {
         return acc;
 
     if (actor.get_children) {
-        for (const ch of actor.get_children()) {
-            const sub = extractActorReadableLabel(ch);
+        const kids = actor.get_children();
+        const limit = Math.min(kids.length, 8);
+        for (let i = 0; i < limit; i++) {
+            const sub = extractActorReadableLabel(kids[i], depth + 1);
             if (sub)
                 return sub;
         }
