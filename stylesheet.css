@@ -1,0 +1,354 @@
+/* TopBar Pet 2.0 Stylesheet */
+
+.topbar-pet-actor {
+    background-color: transparent;
+}
+
+.topbar-pet-bubble {
+    background-color: rgba(24, 26, 36, 0.93);
+    color: #f8f8fc;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    border-radius: 10px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+}
+
+.topbar-pet-lan-badge {
+    background-color: rgba(20, 28, 44, 0.82);
+    color: #8be9fd;
+    border: 1px solid rgba(139, 233, 253, 0.35);
+    border-radius: 7px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.topbar-pet-particle {
+    font-size: 14px;
+    font-weight: bold;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+.topbar-pet-toy {
+    font-size: 16px;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Popup Menu RPG Stats Styling */
+.topbar-pet-header-box {
+    padding: 2px 4px;
+    spacing: 8px;
+}
+
+.topbar-pet-title {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.topbar-pet-level-badge {
+    background-color: rgba(246, 156, 62, 0.25);
+    color: #ffb86c;
+    border: 1px solid rgba(246, 156, 62, 0.55);
+    border-radius: 99px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.topbar-pet-stat-container {
+    spacing: 5px;
+    padding: 2px 0;
+    min-width: 235px;
+}
+
+.topbar-pet-stat-line {
+    spacing: 8px;
+}
+
+.topbar-pet-stat-label {
+    font-size: 11.5px;
+    min-width: 68px;
+}
+
+.topbar-pet-stat-value {
+    font-size: 11px;
+    min-width: 36px;
+    text-align: right;
+    opacity: 0.85;
+}
+
+.topbar-pet-bar-track {
+    background-color: rgba(128, 128, 140, 0.28);
+    border-radius: 5px;
+    height: 7px;
+}
+
+.topbar-pet-bar-hunger {
+    background-color: #f69c3e;
+    border-radius: 5px;
+    height: 7px;
+}
+
+.topbar-pet-bar-mood {
+    background-color: #ff79c6;
+    border-radius: 5px;
+    height: 7px;
+}
+
+.topbar-pet-bar-energy {
+    background-color: #50fa7b;
+    border-radius: 5px;
+    height: 7px;
+}
+
+.topbar-pet-sys-label {
+    font-size: 11px;
+    opacity: 0.82;
+}
+
+/* =========================================================================
+   LAN Incoming Duel Challenge Dropdown Card
+   ========================================================================= */
+.topbar-pet-challenge-card {
+    background-color: rgba(22, 24, 35, 0.96);
+    border: 1.5px solid rgba(255, 184, 108, 0.7);
+    border-radius: 14px;
+    padding: 12px 18px;
+    spacing: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.topbar-pet-challenge-title {
+    color: #ffb86c;
+    font-weight: 800;
+    font-size: 13.5px;
+    text-align: center;
+}
+
+.topbar-pet-challenge-desc {
+    color: #f8f8f2;
+    font-size: 12px;
+}
+
+.topbar-pet-challenge-btns {
+    spacing: 12px;
+    padding-top: 4px;
+}
+
+.topbar-pet-btn-accept {
+    background-color: #50fa7b;
+    color: #161821;
+    font-weight: 800;
+    font-size: 12px;
+    border-radius: 8px;
+    padding: 5px 14px;
+}
+
+.topbar-pet-btn-accept:hover {
+    background-color: #69ff94;
+}
+
+.topbar-pet-btn-decline {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #f8f8f2;
+    font-weight: 600;
+    font-size: 12px;
+    border-radius: 8px;
+    padding: 5px 14px;
+}
+
+.topbar-pet-btn-decline:hover {
+    background-color: rgba(255, 85, 85, 0.45);
+}
+
+/* =========================================================================
+   Top-Center Floating Auto-Battle Arena Window
+   ========================================================================= */
+.topbar-pet-arena-window {
+    background-color: rgba(18, 20, 30, 0.96);
+    border: 1.5px solid rgba(189, 147, 249, 0.55);
+    border-radius: 14px;
+    padding: 10px 12px 12px 12px;
+    spacing: 7px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+}
+
+.topbar-pet-arena-titlebar {
+    padding: 2px 4px;
+    spacing: 8px;
+}
+
+.topbar-pet-arena-title {
+    color: #f8f8f2;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.topbar-pet-arena-close {
+    color: #ff79c6;
+    background-color: rgba(255, 121, 198, 0.14);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.topbar-pet-arena-close:hover {
+    background-color: rgba(255, 85, 85, 0.6);
+    color: #ffffff;
+}
+
+.topbar-pet-arena-hud {
+    spacing: 12px;
+    padding: 2px 4px;
+}
+
+.topbar-pet-fighter-hud {
+    spacing: 3px;
+}
+
+.topbar-pet-fighter-name {
+    color: #f1fa8c;
+    font-size: 11.5px;
+    font-weight: 800;
+}
+
+.topbar-pet-fighter-hptext {
+    color: #cbd2e6;
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+.topbar-pet-arena-vs {
+    color: #ff5555;
+    font-size: 15px;
+    font-weight: 900;
+    padding: 0 4px;
+}
+
+.topbar-pet-hp-track {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+}
+
+.topbar-pet-hp-fill-ally {
+    background-color: #50fa7b;
+    border-radius: 5px;
+}
+
+.topbar-pet-hp-fill-enemy {
+    background-color: #ff5555;
+    border-radius: 5px;
+}
+
+.topbar-pet-rage-track {
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 3px;
+}
+
+.topbar-pet-rage-fill {
+    background-color: #ffb86c;
+    border-radius: 3px;
+}
+
+.topbar-pet-arena-banner {
+    background-color: rgba(189, 147, 249, 0.16);
+    color: #f8f8fc;
+    border-radius: 7px;
+    padding: 3px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+}
+
+.topbar-pet-arena-stage {
+    background-gradient-direction: vertical;
+    background-gradient-start: #191d2e;
+    background-gradient-end: #28233c;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+}
+
+.topbar-pet-arena-floor {
+    background-color: rgba(139, 233, 253, 0.35);
+    border-radius: 2px;
+}
+
+.topbar-pet-stage-nametag-left {
+    color: #50fa7b;
+    background-color: rgba(12, 14, 22, 0.72);
+    border-radius: 5px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.topbar-pet-stage-nametag-right {
+    color: #ff79c6;
+    background-color: rgba(12, 14, 22, 0.72);
+    border-radius: 5px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+/* Compact Combat Damage / Crit / Heal Floating Labels */
+.topbar-pet-dmg-normal {
+    color: #ff867c;
+    font-size: 11.5px;
+    font-weight: 800;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.topbar-pet-dmg-crit {
+    color: #ffd866;
+    font-size: 13px;
+    font-weight: 900;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.92);
+}
+
+.topbar-pet-dmg-heal {
+    color: #50fa7b;
+    font-size: 11.5px;
+    font-weight: 800;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.topbar-pet-dmg-guard {
+    color: #8be9fd;
+    font-size: 11.5px;
+    font-weight: 800;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.topbar-pet-dmg-evade {
+    color: #bd93f9;
+    font-size: 11.5px;
+    font-weight: 800;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Golden Level-Up Notification Toast Banner */
+.topbar-pet-levelup-toast {
+    background-color: rgba(24, 22, 36, 0.96);
+    border: 1.5px solid #ffd866;
+    border-radius: 12px;
+    padding: 8px 16px;
+    spacing: 3px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+}
+
+.topbar-pet-levelup-title {
+    color: #ffd866;
+    font-size: 13px;
+    font-weight: 900;
+    text-align: center;
+}
+
+.topbar-pet-levelup-sub {
+    color: #f8f8f2;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-align: center;
+}

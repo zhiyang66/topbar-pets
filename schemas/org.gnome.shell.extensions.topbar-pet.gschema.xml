@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.topbar-pet" path="/org/gnome/shell/extensions/topbar-pet/">
+
+    <key name="owner-name" type="s">
+      <default>''</default>
+      <summary>Owner Display Name for LAN Multiplayer</summary>
+    </key>
+
+    <key name="pet-name" type="s">
+      <default>'团子'</default>
+      <summary>Starter Pet Name</summary>
+    </key>
+
+    <key name="roster-json" type="s">
+      <default>''</default>
+      <summary>Adopted Pet Roster JSON (Up to 3 Pets with Individual Levels, Archetypes &amp; Skins)</summary>
+    </key>
+
+    <key name="lan-enabled" type="b">
+      <default>true</default>
+      <summary>Enable Automatic LAN Discovery, Co-op Top Bar &amp; Arena Battles</summary>
+    </key>
+
+    <!-- Rendering & Movement -->
+    <key name="pixel-art-scaling" type="b">
+      <default>true</default>
+      <summary>Crisp Nearest-Neighbor Pixel Scaling</summary>
+    </key>
+
+    <key name="pet-size" type="i">
+      <default>38</default>
+      <summary>Pet Render Size in Pixels</summary>
+    </key>
+
+    <key name="vertical-offset" type="i">
+      <default>4</default>
+      <summary>Vertical Offset from Bottom of Top Panel</summary>
+    </key>
+
+    <key name="pet-opacity" type="i">
+      <default>255</default>
+      <summary>Pet Opacity (50-255)</summary>
+    </key>
+
+    <key name="walk-speed" type="d">
+      <default>1.0</default>
+      <summary>Base Movement Speed Multiplier</summary>
+    </key>
+
+    <!-- Essential Usability Controls -->
+    <key name="click-through" type="b">
+      <default>false</default>
+      <summary>Click-Through (Ghost) Mode</summary>
+    </key>
+
+    <key name="show-panel-icon" type="b">
+      <default>true</default>
+      <summary>Show Control Menu Icon in Top Bar</summary>
+    </key>
+
+  </schema>
+</schemalist>
