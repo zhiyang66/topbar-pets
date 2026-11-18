@@ -12,6 +12,6 @@
   ],
   "settings-schema": "org.gnome.shell.extensions.topbar-pet",
   "url": "https://github.com/zhiyang66/topbar-pets",
-  "version": 5,
-  "version-name": "2.0.3"
+  "version": 6,
+  "version-name": "2.0.4"
 }
