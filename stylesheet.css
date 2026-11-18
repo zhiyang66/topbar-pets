@@ -1,14 +1,14 @@
-/* TopBar Pet 2.0 Stylesheet */
+/* TopBar Pet 3.0 Stylesheet — Frameless 2.5D Transparent Battlefield & Zero-Occlusion UI */
 
 /* Compact Top-Bar Status Icon Pill (beats #panel .panel-button ID specificity in GNOME 50 / Yaru!) */
 #panel .panel-button.topbar-pet-panel-btn,
 #panel Gjs_topbar-pet_local_gnome-extension_src_panelMenu_PetPanelIndicator.panel-button,
 #panel Gjs_topbar-pet_local_gnome-extension_panelMenu_PetPanelIndicator.panel-button,
 #panel Gjs_PetPanelIndicator.panel-button {
-    -natural-hpadding: 4px !important;
+    -natural-hpadding: 5px !important;
     -minimum-hpadding: 3px !important;
-    padding-left: 4px !important;
-    padding-right: 4px !important;
+    padding-left: 5px !important;
+    padding-right: 5px !important;
     margin: 0 !important;
 }
 
@@ -22,40 +22,67 @@
     margin: 0 !important;
 }
 
+.topbar-pet-panel-capsule {
+    spacing: 4px;
+}
+
+.topbar-pet-panel-subbadge {
+    font-size: 10.5px;
+    font-weight: 800;
+    color: #ffe066;
+    padding: 0 2px;
+}
+
 .topbar-pet-actor {
     background-color: transparent;
 }
 
 .topbar-pet-bubble {
-    background-color: rgba(24, 26, 36, 0.93);
+    background-color: rgba(20, 22, 32, 0.92);
     color: #f8f8fc;
     border: 1px solid rgba(255, 255, 255, 0.24);
     border-radius: 10px;
     padding: 4px 10px;
     font-size: 11.5px;
     font-weight: 600;
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.42);
 }
 
 .topbar-pet-lan-badge {
-    background-color: rgba(20, 28, 44, 0.82);
+    background-color: rgba(18, 25, 40, 0.84);
     color: #8be9fd;
-    border: 1px solid rgba(139, 233, 253, 0.35);
+    border: 1px solid rgba(139, 233, 253, 0.36);
     border-radius: 7px;
     padding: 1px 6px;
     font-size: 10px;
     font-weight: 700;
 }
 
+.topbar-pet-worldboss-hud {
+    background-color: rgba(26, 14, 34, 0.88);
+    color: #ff79c6;
+    border: 1px solid rgba(255, 121, 198, 0.55);
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 10.5px;
+    font-weight: 800;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.topbar-pet-grapple-line {
+    background-color: rgba(230, 244, 255, 0.78);
+    border-radius: 1px;
+}
+
 .topbar-pet-particle {
     font-size: 14px;
     font-weight: bold;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.48);
 }
 
 .topbar-pet-toy {
-    font-size: 16px;
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    font-size: 15px;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.55);
 }
 
 /* Popup Menu RPG Stats Styling */
@@ -82,7 +109,7 @@
 .topbar-pet-stat-container {
     spacing: 5px;
     padding: 2px 0;
-    min-width: 235px;
+    min-width: 245px;
 }
 
 .topbar-pet-stat-line {
@@ -127,15 +154,57 @@
 
 .topbar-pet-sys-label {
     font-size: 11px;
-    opacity: 0.82;
+    opacity: 0.85;
+}
+
+/* Compact Action Pill Grid inside Panel PopupMenu (saves vertical space for Submenus!) */
+.topbar-pet-menu-grid-row {
+    spacing: 6px;
+    padding: 2px 0;
+}
+
+.topbar-pet-menu-tile-btn {
+    background-color: rgba(255, 255, 255, 0.09);
+    color: #f8f8f2;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.topbar-pet-menu-tile-btn:hover {
+    background-color: rgba(189, 147, 249, 0.28);
+    border-color: rgba(189, 147, 249, 0.65);
+}
+
+.topbar-pet-adopt-mini-btn {
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 7px;
+    padding: 4px 7px;
+    font-size: 13px;
+}
+
+.topbar-pet-adopt-mini-btn:hover {
+    background-color: rgba(80, 250, 123, 0.28);
+}
+
+.topbar-pet-popup-menu .popup-menu-item {
+    padding-top: 5px;
+    padding-bottom: 5px;
+}
+
+.topbar-pet-popup-menu .popup-sub-menu {
+    max-height: 250px;
 }
 
 /* =========================================================================
-   LAN Incoming Duel Challenge Dropdown Card
+   LAN Incoming Duel / Co-op Raid Challenge Dropdown Card
    ========================================================================= */
 .topbar-pet-challenge-card {
-    background-color: rgba(22, 24, 35, 0.96);
-    border: 1.5px solid rgba(255, 184, 108, 0.7);
+    background-color: rgba(20, 22, 34, 0.95);
+    border: 1.5px solid rgba(255, 184, 108, 0.72);
     border-radius: 14px;
     padding: 12px 18px;
     spacing: 8px;
@@ -186,174 +255,277 @@
 }
 
 /* =========================================================================
-   Top-Center Floating Auto-Battle Arena Window
+   Frameless Desktop-Top 2.5D Transparent Battlefield & 3-Tier Micro-HUD
    ========================================================================= */
-.topbar-pet-arena-window {
-    background-color: rgba(18, 20, 30, 0.96);
-    border: 1.5px solid rgba(189, 147, 249, 0.55);
-    border-radius: 14px;
-    padding: 10px 12px 12px 12px;
-    spacing: 7px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
-}
 
-.topbar-pet-arena-titlebar {
-    padding: 2px 4px;
+/* Tier 1: Slim Fixed-Width Dynamic-Island Control Pill at Top-Center (aligned with 632px Z-lane!) */
+.topbar-pet-arena-pill {
+    background-color: rgba(16, 18, 28, 0.88);
+    border: 1px solid rgba(189, 147, 249, 0.48);
+    border-radius: 99px;
+    padding: 4px 12px;
     spacing: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
-.topbar-pet-arena-title {
-    color: #f8f8f2;
-    font-size: 12px;
+.topbar-pet-pill-status {
+    color: #f8f8fc;
+    font-size: 11.5px;
+    font-weight: 800;
+    text-align: center;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.topbar-pet-pill-team-track {
+    background-color: rgba(255, 255, 255, 0.16);
+    border-radius: 99px;
+}
+
+.topbar-pet-pill-ally-fill {
+    background-color: #50fa7b;
+    border-radius: 99px;
+}
+
+.topbar-pet-pill-enemy-fill {
+    background-color: #ff5555;
+    border-radius: 99px;
+}
+
+.topbar-pet-arena-detail-btn {
+    color: #8be9fd;
+    background-color: rgba(139, 233, 253, 0.14);
+    border: 1px solid rgba(139, 233, 253, 0.34);
+    border-radius: 99px;
+    padding: 1px 8px;
+    font-size: 10.5px;
     font-weight: 800;
 }
 
+.topbar-pet-arena-detail-btn:hover {
+    background-color: rgba(139, 233, 253, 0.32);
+    color: #ffffff;
+}
+
 .topbar-pet-arena-close {
-    color: #ff79c6;
-    background-color: rgba(255, 121, 198, 0.14);
-    border-radius: 6px;
-    padding: 2px 8px;
-    font-size: 11px;
+    color: #ffb86c;
+    background-color: rgba(255, 184, 108, 0.16);
+    border-radius: 99px;
+    padding: 1px 8px;
+    font-size: 10.5px;
     font-weight: 800;
 }
 
 .topbar-pet-arena-close:hover {
-    background-color: rgba(255, 85, 85, 0.6);
+    background-color: rgba(255, 85, 85, 0.72);
     color: #ffffff;
 }
 
-.topbar-pet-arena-hud {
+/* Expandable Battle Details & Live Combat Log Drawer (632px aligned under Top Pill) */
+.topbar-pet-arena-details-drawer {
+    background-color: rgba(14, 16, 26, 0.90);
+    border: 1px solid rgba(139, 233, 253, 0.38);
+    border-radius: 14px;
+    padding: 8px 12px;
     spacing: 12px;
-    padding: 2px 4px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52);
 }
 
-.topbar-pet-fighter-hud {
-    spacing: 3px;
+.topbar-pet-details-col {
+    spacing: 4px;
 }
 
-.topbar-pet-fighter-name {
-    color: #f1fa8c;
-    font-size: 11.5px;
+.topbar-pet-details-divider {
+    background-color: rgba(255, 255, 255, 0.12);
+    width: 1px;
+}
+
+.topbar-pet-details-header {
+    color: #8be9fd;
+    font-size: 11px;
     font-weight: 800;
 }
 
-.topbar-pet-fighter-hptext {
-    color: #cbd2e6;
+.topbar-pet-details-unit-line {
+    color: #f8f8f2;
     font-size: 10.5px;
     font-weight: 600;
 }
 
-.topbar-pet-arena-vs {
-    color: #ff5555;
-    font-size: 15px;
-    font-weight: 900;
-    padding: 0 4px;
-}
-
-.topbar-pet-hp-track {
-    background-color: rgba(255, 255, 255, 0.14);
-    border-radius: 5px;
-}
-
-.topbar-pet-hp-fill-ally {
-    background-color: #50fa7b;
-    border-radius: 5px;
-}
-
-.topbar-pet-hp-fill-enemy {
-    background-color: #ff5555;
-    border-radius: 5px;
-}
-
-.topbar-pet-rage-track {
-    background-color: rgba(255, 255, 255, 0.10);
-    border-radius: 3px;
-}
-
-.topbar-pet-rage-fill {
-    background-color: #ffb86c;
-    border-radius: 3px;
-}
-
-.topbar-pet-arena-banner {
-    background-color: rgba(189, 147, 249, 0.16);
-    color: #f8f8fc;
-    border-radius: 7px;
-    padding: 3px 10px;
-    font-size: 11.5px;
+.topbar-pet-details-summary {
+    color: #f1fa8c;
+    font-size: 10.5px;
     font-weight: 700;
+    padding-top: 2px;
 }
 
-.topbar-pet-arena-stage {
-    background-gradient-direction: vertical;
-    background-gradient-start: #191d2e;
-    background-gradient-end: #28233c;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 10px;
+.topbar-pet-details-log-box {
+    spacing: 2px;
+    padding-right: 4px;
 }
 
-.topbar-pet-arena-floor {
-    background-color: rgba(139, 233, 253, 0.35);
+.topbar-pet-details-log-line {
+    color: #e2e6f3;
+    font-size: 10.5px;
+}
+
+/* Boss Phase Bar (Suspended cleanly under Top Pill during Boss Raid) */
+.topbar-pet-boss-bar-box {
+    background-color: rgba(22, 14, 34, 0.82);
+    border: 1px solid rgba(255, 121, 198, 0.55);
+    border-radius: 99px;
+    padding: 2px 12px;
+    spacing: 8px;
+}
+
+.topbar-pet-boss-bar-title {
+    color: #ff79c6;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.topbar-pet-boss-hp-track {
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 99px;
+}
+
+.topbar-pet-boss-hp-fill {
+    background-gradient-direction: horizontal;
+    background-gradient-start: #ff5555;
+    background-gradient-end: #bd93f9;
+    border-radius: 99px;
+}
+
+/* Frameless Transparent 2.5D Stage & Subtle Horizon Ground Band */
+.topbar-pet-arena-stage-transparent {
+    background-color: transparent;
+}
+
+.topbar-pet-arena-z-lane {
+    background-gradient-direction: horizontal;
+    background-gradient-start: rgba(12, 16, 28, 0.04);
+    background-gradient-end: rgba(12, 16, 28, 0.04);
+    background-color: rgba(14, 18, 32, 0.24);
+    border-top: 1px solid rgba(139, 233, 253, 0.22);
+    border-bottom: 1px solid rgba(189, 147, 249, 0.24);
+    border-radius: 40px;
+}
+
+.topbar-pet-arena-z-midline {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 1px;
+}
+
+/* Ground Contact Shadow Oval (scales with Z & JumpH!) */
+.topbar-pet-ground-shadow {
+    background-color: rgba(8, 10, 18, 0.46);
+    border-radius: 99px;
+}
+
+/* Tier 2: Overhead Following Micro-HUD (Name + Element Aura + Delayed Ghost HP + Rage) */
+.topbar-pet-overhead-box {
+    spacing: 1px;
+}
+
+.topbar-pet-overhead-name-ally {
+    color: #e2ffe9;
+    background-color: rgba(10, 16, 24, 0.72);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: 9.5px;
+    font-weight: 800;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+}
+
+.topbar-pet-overhead-name-enemy {
+    color: #ffe2ec;
+    background-color: rgba(22, 10, 20, 0.72);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: 9.5px;
+    font-weight: 800;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+}
+
+.topbar-pet-micro-hp-bg {
+    background-color: rgba(10, 12, 18, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.26);
+    border-radius: 3px;
+}
+
+.topbar-pet-micro-hp-ghost {
+    background-color: rgba(255, 255, 255, 0.82);
     border-radius: 2px;
 }
 
-.topbar-pet-stage-nametag-left {
-    color: #50fa7b;
-    background-color: rgba(12, 14, 22, 0.72);
-    border-radius: 5px;
-    padding: 1px 5px;
-    font-size: 10px;
-    font-weight: 800;
+.topbar-pet-micro-hp-ally {
+    background-color: #50fa7b;
+    border-radius: 2px;
 }
 
-.topbar-pet-stage-nametag-right {
-    color: #ff79c6;
-    background-color: rgba(12, 14, 22, 0.72);
-    border-radius: 5px;
-    padding: 1px 5px;
-    font-size: 10px;
-    font-weight: 800;
+.topbar-pet-micro-hp-enemy {
+    background-color: #ff5555;
+    border-radius: 2px;
 }
 
-/* Compact Combat Damage / Crit / Heal Floating Labels */
+.topbar-pet-micro-rage-bg {
+    background-color: rgba(10, 12, 18, 0.75);
+    border-radius: 2px;
+}
+
+.topbar-pet-micro-rage-fill {
+    background-color: #ffd866;
+    border-radius: 2px;
+}
+
+/* Tier 3: High-Contrast Outlined Combat Floating Text */
 .topbar-pet-dmg-normal {
     color: #ff867c;
     font-size: 11.5px;
     font-weight: 800;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 
 .topbar-pet-dmg-crit {
     color: #ffd866;
+    font-size: 13.5px;
+    font-weight: 900;
+    text-shadow: 0 1px 5px rgba(0, 0, 0, 0.98);
+}
+
+.topbar-pet-dmg-reaction {
+    color: #ff79c6;
     font-size: 13px;
     font-weight: 900;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.92);
+    background-color: rgba(16, 12, 26, 0.72);
+    border-radius: 5px;
+    padding: 0 5px;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 
 .topbar-pet-dmg-heal {
     color: #50fa7b;
     font-size: 11.5px;
     font-weight: 800;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 
 .topbar-pet-dmg-guard {
     color: #8be9fd;
     font-size: 11.5px;
     font-weight: 800;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 
 .topbar-pet-dmg-evade {
     color: #bd93f9;
     font-size: 11.5px;
     font-weight: 800;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 
-/* Golden Level-Up Notification Toast Banner */
+/* Golden Level-Up / Achievement / Quest Toast Banner */
 .topbar-pet-levelup-toast {
-    background-color: rgba(24, 22, 36, 0.96);
+    background-color: rgba(22, 20, 34, 0.95);
     border: 1.5px solid #ffd866;
     border-radius: 12px;
     padding: 8px 16px;

@@ -317,9 +317,17 @@ export class DesktopPerception {
         const minX = monX + 6;
         const maxX = Math.max(minX + 16, monX + monW - petW - 6);
 
+        // Keep Top-Bar strolling clear of left Activities & right System Tray / Pet Indicator icons!
+        const leftBoxW = Math.min(200, Math.max(58, Main.panel?._leftBox?.width || 64));
+        const rightBoxW = Math.min(300, Math.max(115, Main.panel?._rightBox?.width || 130));
+        const topBarMinX = Math.min(maxX - 80, monX + leftBoxW + 6);
+        const topBarMaxX = Math.max(topBarMinX + 60, monX + monW - rightBoxW - petW - 6);
+
         return {
             minX,
             maxX,
+            topBarMinX,
+            topBarMaxX,
             groundY,       // Top-Bar ground Y
             bottomGroundY, // Full-screen floor Y (above Ubuntu bottom dock if any)
             panelY: py,
@@ -394,5 +402,78 @@ export class DesktopPerception {
         }
 
         return ledges;
+    }
+
+    /**
+     * Read-only classification of currently focused work context for companion RPG perks.
+     */
+    classifyFocusedAppContext() {
+        const focusWin = global.display?.focus_window;
+        if (!focusWin)
+            return { category: 'idle_desktop', appName: '', rect: null };
+
+        let rect = null;
+        try {
+            if (focusWin.minimized || focusWin.get_window_type() !== Meta.WindowType.NORMAL)
+                return { category: 'idle_desktop', appName: '', rect: null };
+            const r = focusWin.get_frame_rect();
+            rect = { x: r.x, y: r.y, width: r.width, height: r.height };
+        } catch (_e) {
+            rect = null;
+        }
+
+        const appName = this._resolveWindowAppName(focusWin);
+        const wmClass = (focusWin.get_wm_class?.() || '').toLowerCase();
+        const key = `${wmClass} ${appName.toLowerCase()}`;
+
+        if (/code|codium|jetbrains|idea|pycharm|webstorm|goland|clion|rustrover|zed|nvim|vim|emacs|terminal|kitty|alacritty|wezterm|ptyxis|konsole|bash|tmux/.test(key))
+            return { category: 'coding', appName, rect };
+        if (/obsidian|notion|libreoffice|soffice|evince|okular|zotero|gimp|inkscape|krita|blender|figma|typora/.test(key))
+            return { category: 'creative_docs', appName, rect };
+        if (/firefox|chrome|chromium|brave|edge|epiphany|vivaldi|zen/.test(key))
+            return { category: 'browsing', appName, rect };
+
+        return { category: 'general', appName, rect };
+    }
+
+    /**
+     * Find the widest unoccupied empty gap on the Top Bar so zero-occlusion badges/eggs
+     * NEVER overlap or block any software tray icon, clock, or workspace button!
+     */
+    findSafeTopBarEmptyGap(minWidth = 40) {
+        const bounds = this.getScreenRoamBounds(minWidth, 32, 0);
+        if (!bounds)
+            return null;
+
+        const targets = this.scanLiveTargets().sort((a, b) => a.x - b.x);
+        const occupied = [];
+        for (const t of targets) {
+            const s = Math.max(bounds.monX, t.x - 10);
+            const e = Math.min(bounds.monX + bounds.monW, t.x + t.w + 10);
+            if (occupied.length > 0 && s <= occupied[occupied.length - 1].e)
+                occupied[occupied.length - 1].e = Math.max(occupied[occupied.length - 1].e, e);
+            else
+                occupied.push({ s, e });
+        }
+
+        let bestGap = null;
+        let cursor = bounds.monX + 14;
+        const rightEnd = bounds.monX + bounds.monW - 14;
+
+        for (const seg of occupied) {
+            if (seg.s - cursor >= minWidth) {
+                const w = seg.s - cursor;
+                if (!bestGap || w > bestGap.width)
+                    bestGap = { x: cursor, width: w, centerX: Math.round(cursor + w / 2), panelY: bounds.panelY, panelH: bounds.panelH };
+            }
+            cursor = Math.max(cursor, seg.e);
+        }
+        if (rightEnd - cursor >= minWidth) {
+            const w = rightEnd - cursor;
+            if (!bestGap || w > bestGap.width)
+                bestGap = { x: cursor, width: w, centerX: Math.round(cursor + w / 2), panelY: bounds.panelY, panelH: bounds.panelH };
+        }
+
+        return bestGap;
     }
 }

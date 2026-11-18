@@ -1,7 +1,7 @@
 {
   "uuid": "topbar-pet@local.gnome-extension",
-  "name": "TopBar Pet 2.0 (顶部栏联机养成桌宠)",
-  "description": "GNOME 顶部栏与全屏养成联机桌宠扩展：支持不限数量多宠领养与独立出场开关、全屏非破坏性自由漫游（窗口屋顶驻足/跳伞/爬边框）、6大职业流派36种 PixelFX 像素技能、AI 宠物提示词工坊与局域网跨分辨率同屏对战！",
+  "name": "TopBar Pet 3.0 (顶部栏联机养成桌宠)",
+  "description": "GNOME 顶部栏与全屏养成联机桌宠扩展 3.0：桌面顶层无边框 2.5D 透明鼠标穿透战场（自动 1v1 / 2v2 元素连携双打 / 5 大随机深渊 Boss 携杂兵波次 + 可展开实时战报面板）、42 种组件化 PixelFX 技能与 4 槽跨流派自由配招、18 件圣物与零遮挡神秘孵蛋、全屏自由漫游 2.0（窗口跳跃跑酷/抓钩摆荡/篝火露营/多宠防乱飞编导）与高负载静音省电模式！",
   "shell-version": [
     "45",
     "46",
@@ -12,6 +12,6 @@
   ],
   "settings-schema": "org.gnome.shell.extensions.topbar-pet",
   "url": "https://github.com/zhiyang66/topbar-pets",
-  "version": 8,
-  "version-name": "2.1.0"
+  "version": 9,
+  "version-name": "3.0.0"
 }

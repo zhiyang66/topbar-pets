@@ -7,6 +7,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { addChromeActor, removeChromeActor } from './compat.js';
 import { loadSpriteBankForProfile } from './spriteLoader.js';
 import { getArchetype } from './rpg.js';
+import { SKILL_CATALOG } from './skillSystem.js';
 
 const QUOTES = {
     cat: {
@@ -129,7 +130,16 @@ export class PetActor {
         this._climbDirY = -1;
         this._ascendTargetY = 0;
         this._ascendLedge = null;
-        this._propBadge = null;       // Non-reactive 🪂 / 🎈 prop badge above pet
+        this._propBadge = null;       // Non-reactive prop badge above pet
+        this._grappleLine = null;     // Non-reactive pendulum line during grapple_swing
+        this._roamRole = 'active_roamer'; // 'active_roamer' | 'topbar_patrol' | 'camp_resting'
+        this._campSpotX = null;
+        this._ecoMode = false;
+        this._parkourArc = null;      // { x0, y0, x1, y1, durMs, targetLedge }
+        this._grappleArc = null;      // { ax, ay, len, ang0, ang1, durMs, targetLedge }
+        this._bezelClimb = null;      // { x, yTarget, ledge, onLeft }
+        this._worldBossTargetX = null;
+        this._lastTreasureMs = Date.now() - Math.floor(Math.random() * 20000);
         this._lastHitComboStep = -1;
         this._stuntTriggered = false;
         this._sneakExitX = null;
@@ -200,8 +210,10 @@ export class PetActor {
         this.reloadSprites();
         const bounds = this._getBounds();
         if (bounds) {
-            const span = Math.max(60, bounds.maxX - bounds.minX);
-            this._x = Math.round(bounds.minX + span * ((0.2 + slotIndex * 0.27) % 0.85));
+            const tbMin = bounds.topBarMinX ?? bounds.minX;
+            const tbMax = bounds.topBarMaxX ?? bounds.maxX;
+            const span = Math.max(60, tbMax - tbMin);
+            this._x = Math.round(tbMin + span * ((0.18 + slotIndex * 0.25) % 0.82));
             this._y = bounds.groundY;
             this._applyPosition();
         } else {
@@ -225,6 +237,7 @@ export class PetActor {
         }
         this._endStageDragCapture();
         this._clearPropBadge();
+        this._clearGrappleLine();
 
         for (const id of this._settingsSignals)
             this._settings.disconnect(id);
@@ -269,8 +282,100 @@ export class PetActor {
     }
 
     isAvailableForSocial() {
-        return !this._isReleasing && !this._inArenaBattle &&
-            !['drag', 'arena_enter', 'sleep', 'parachute_glide', 'balloon_ascend', 'wall_climb', 'free_fall'].includes(this._state);
+        return !this._isReleasing && !this._inArenaBattle && !this._ecoMode &&
+            this._worldBossTargetX === null &&
+            !['drag', 'arena_enter', 'sleep', 'parachute_glide', 'balloon_ascend', 'wall_climb', 'free_fall',
+                'window_parkour', 'grapple_swing', 'window_bezel_climb', 'class_glider', 'dig_treasure'].includes(this._state);
+    }
+
+    isAirborneRoamState() {
+        return ['parachute_glide', 'balloon_ascend', 'wall_climb', 'free_fall', 'window_parkour', 'grapple_swing', 'window_bezel_climb', 'class_glider'].includes(this._state);
+    }
+
+    getActiveLedgeWindow() {
+        return this._roamSurface === 'ledge' ? (this._activeLedge?.metaWin || null) : null;
+    }
+
+    setEcoMode(enabled) {
+        const next = Boolean(enabled);
+        if (this._ecoMode === next)
+            return;
+        this._ecoMode = next;
+        if (next && !this._inArenaBattle && !this._isReleasing) {
+            this._clearPropBadge();
+            this._clearGrappleLine();
+            this._resetPoseTransform();
+            if (this.isAirborneRoamState()) {
+                const bounds = this._getBounds();
+                if (bounds) {
+                    this._y = bounds.groundY;
+                    this._roamSurface = 'topbar';
+                }
+            }
+            this._setState('sleep', 60000);
+        } else if (!next && this._state === 'sleep' && !this._inArenaBattle) {
+            this._setState('idle', 1800);
+        }
+    }
+
+    setRoamAssignment(role = 'active_roamer', campSpotX = null) {
+        this._roamRole = role;
+        this._campSpotX = campSpotX;
+        if (!this.isFreeRoamEnabled() || this._inArenaBattle || this._isReleasing)
+            return;
+        const bounds = this._getBounds();
+        if (!bounds)
+            return;
+
+        if (role === 'topbar_patrol' && this._roamSurface !== 'topbar' && !this.isAirborneRoamState()) {
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
+            this._y = bounds.groundY;
+            this._applyPosition();
+        } else if (role === 'camp_resting' && this._roamSurface !== 'floor' && !this.isAirborneRoamState() && Number.isFinite(campSpotX)) {
+            this._roamSurface = 'floor';
+            this._activeLedge = null;
+            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, campSpotX));
+            this._y = bounds.bottomGroundY;
+            this._setState(Math.random() < 0.55 ? 'sleep' : 'idle', 12000);
+            this._applyPosition();
+        }
+    }
+
+    recallToTopBar(targetX = null) {
+        if (this._inArenaBattle || this._isReleasing)
+            return;
+        const bounds = this._getBounds();
+        if (!bounds)
+            return;
+        this._clearPropBadge();
+        this._clearGrappleLine();
+        this._resetPoseTransform();
+        this._effects.spawnPixelFxBurst(this._x + this._petW / 2, this._y + this._petH, 'arcane/blink-out', 1);
+        this._roamSurface = 'topbar';
+        this._activeLedge = null;
+        if (Number.isFinite(targetX))
+            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, targetX));
+        this._y = bounds.groundY;
+        this._jump(-4.5);
+        this._setState('happy', 1300);
+        this._effects.spawnPixelFxBurst(this._x + this._petW / 2, this._y + this._petH, 'arcane/blink-in', 1);
+        this._applyPosition();
+    }
+
+    setWorldBossTarget(bossX = null) {
+        this._worldBossTargetX = Number.isFinite(bossX) ? bossX : null;
+        if (this._worldBossTargetX !== null && !this._inArenaBattle && !this._isReleasing) {
+            const bounds = this._getBounds();
+            if (bounds && this._roamSurface !== 'topbar') {
+                this._clearPropBadge();
+                this._clearGrappleLine();
+                this._roamSurface = 'topbar';
+                this._activeLedge = null;
+                this._y = bounds.groundY;
+            }
+            this._setState('run', 4000);
+        }
     }
 
     isInArenaBattle() {
@@ -422,6 +527,176 @@ export class PetActor {
         }
     }
 
+    _clearGrappleLine() {
+        if (this._grappleLine) {
+            removeChromeActor(this._grappleLine);
+            this._grappleLine.destroy();
+            this._grappleLine = null;
+        }
+    }
+
+    _ensureGrappleLine() {
+        if (this._grappleLine)
+            return this._grappleLine;
+        const line = new St.Widget({
+            style_class: 'topbar-pet-grapple-line',
+            width: 2,
+            height: 20,
+            reactive: false,
+        });
+        line.set_pivot_point(0.5, 0.0);
+        line.connect('destroy', () => {
+            if (this._grappleLine === line)
+                this._grappleLine = null;
+        });
+        addChromeActor(line, { interactive: false, trackFullscreen: true });
+        this._grappleLine = line;
+        return line;
+    }
+
+    _startWindowParkourLeap(targetLedge, speak = true) {
+        if (!targetLedge)
+            return false;
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._resetPoseTransform();
+        const destX = Math.max(targetLedge.x1, Math.min(targetLedge.x2, Math.round((targetLedge.x1 + targetLedge.x2) / 2 + (Math.random() - 0.5) * 80)));
+        this._parkourArc = {
+            x0: this._x,
+            y0: this._y,
+            x1: destX,
+            y1: targetLedge.y,
+            durMs: 880,
+            targetLedge,
+        };
+        this._facing = destX >= this._x ? 'right' : 'left';
+        this._effects.spawnParticle(this._x + this._petW / 2, this._y + 4, '💨', 14);
+        this._setState('window_parkour', 960);
+        if (speak && Math.random() < 0.65)
+            this.say(`助跑跨窗跑酷——翻跃到「${targetLedge.appName}」屋顶！🤸💨`, 2100);
+        return true;
+    }
+
+    _startWindowBezelClimb(targetLedge, bounds, speak = true) {
+        if (!targetLedge?.winRect)
+            return false;
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._resetPoseTransform();
+        const wr = targetLedge.winRect;
+        const onLeft = Math.abs(this._x - wr.x) <= Math.abs(this._x - (wr.x + wr.width));
+        const bezelX = onLeft
+            ? Math.max(bounds.minX, wr.x - Math.round(this._petW * 0.45))
+            : Math.min(bounds.maxX, wr.x + wr.width - Math.round(this._petW * 0.55));
+        this._x = bezelX;
+        this._y = Math.min(bounds.bottomGroundY, Math.max(targetLedge.y + 90, Math.min(wr.y + wr.height - this._petH, this._y)));
+        this._bezelClimb = { x: bezelX, yTarget: targetLedge.y, ledge: targetLedge, onLeft };
+        this._setState('window_bezel_climb', 5500);
+        if (speak && Math.random() < 0.65)
+            this.say(`扒着「${targetLedge.appName}」窗口边框往上爬咯 🧗✨`, 2100);
+        return true;
+    }
+
+    _startGrappleSwing(bounds, targetLedge = null, speak = true) {
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._resetPoseTransform();
+        const span = bounds.maxX - bounds.minX;
+        const goRight = this._x < bounds.minX + span * 0.5;
+        const anchorX = Math.max(bounds.minX + 80, Math.min(bounds.maxX - 80, Math.round(this._x + (goRight ? 150 : -150))));
+        const anchorY = targetLedge ? targetLedge.y : (bounds.panelY + bounds.panelH);
+        const ropeLen = Math.max(95, Math.min(260, Math.round((bounds.bottomGroundY - anchorY) * 0.52)));
+        this._grappleArc = {
+            ax: anchorX,
+            ay: anchorY,
+            len: ropeLen,
+            ang0: goRight ? -1.05 : 1.05,
+            ang1: goRight ? 0.95 : -0.95,
+            durMs: 1250,
+            targetLedge,
+        };
+        this._facing = goRight ? 'right' : 'left';
+        this._ensureGrappleLine();
+        this._setState('grapple_swing', 1320);
+        if (speak && Math.random() < 0.7)
+            this.say('发射像素抓钩——泰山摆荡横跨桌面！🪝💨', 2200);
+    }
+
+    _startPortalHop(bounds, targetLedge = null, speak = true) {
+        this._clearPropBadge();
+        this._clearGrappleLine();
+        this._resetPoseTransform();
+        this._effects.spawnPixelFxBurst(this._x + this._petW / 2, this._y + this._petH, 'arcane/blink-out', 1);
+
+        if (targetLedge) {
+            this._x = Math.round((targetLedge.x1 + targetLedge.x2) / 2);
+            this._y = targetLedge.y;
+            this._roamSurface = 'ledge';
+            this._activeLedge = targetLedge;
+        } else if (this._roamSurface === 'topbar') {
+            this._x = Math.round(bounds.minX + Math.random() * (bounds.maxX - bounds.minX));
+            this._y = bounds.bottomGroundY;
+            this._roamSurface = 'floor';
+            this._activeLedge = null;
+        } else {
+            this._x = Math.round(bounds.minX + Math.random() * (bounds.maxX - bounds.minX));
+            this._y = bounds.groundY;
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
+        }
+
+        this._jump(-4.0);
+        this._setState('happy', 1100);
+        this._effects.spawnPixelFxBurst(this._x + this._petW / 2, this._y + this._petH, 'arcane/blink-in', 1);
+        if (speak && Math.random() < 0.65)
+            this.say('🌀 开启星界传送门，闪现抵达新据点！✨', 2100);
+    }
+
+    _startClassGlider(bounds, speak = true) {
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._resetPoseTransform();
+        const gliderIcons = { fire: '🔥', ice: '❄️', storm: '⚡', arcane: '🔮', holy: '🍃', martial: '🛸' };
+        this._setPropBadge(gliderIcons[this.pet.archetype] || '🛸');
+        this._facing = this._x < (bounds.minX + bounds.maxX) / 2 ? 'right' : 'left';
+        this._setState('class_glider', 9000);
+        if (speak && Math.random() < 0.65)
+            this.say('展开流派专属推进滑翔翼，斜向巡航桌面~ 🛸✨', 2200);
+    }
+
+    _startDigTreasure() {
+        const now = Date.now();
+        if (now - this._lastTreasureMs < 38000)
+            return false;
+        this._lastTreasureMs = now;
+        this._resetPoseTransform();
+        this._jump(-4.5);
+        this._setState('dig_treasure', 1450);
+
+        const luckyMult = this.pet.trait === 'lucky' ? 2 : 1;
+        const coins = (8 + Math.floor(Math.random() * 11)) * luckyMult;
+        this._roster.addCoins(coins, true);
+        this._roster.grantXp(this.pet.id, 6);
+
+        const cx = this._x + this._petW / 2;
+        const fy = this._y + this._petH;
+        this._effects.spawnPixelFxBurst(cx, fy, 'spawn/coin-drop', 1, { coins: 6 });
+
+        if (!this._roster.activeEgg && Math.random() < 0.08) {
+            this._roster.activeEgg = { progress: 10, presetId: 'dragon' };
+            this._roster.save();
+            this._callbacks.onEggFound?.();
+            this.say(`🎉 哇！挖宝挖到【+${coins}🪙】还捡到一颗神秘宠物蛋 🥚✨`, 3000);
+        } else {
+            this.say(`✨ 嗅嗅鼻子挖到小金库啦！金币 +${coins} 🪙`, 2300);
+        }
+        return true;
+    }
+
     _startParachuteDive(bounds, speak = true) {
         this._activeTarget = null;
         this._activeLedge = null;
@@ -481,6 +756,7 @@ export class PetActor {
             this._contextMenu.close();
         this._endStageDragCapture();
         this._clearPropBadge();
+        this._clearGrappleLine();
         this._dragging = false;
         this._resetPoseTransform();
 
@@ -721,6 +997,7 @@ export class PetActor {
         this._isReleasing = true;
         this._endStageDragCapture();
         this._clearPropBadge();
+        this._clearGrappleLine();
         this._resetPoseTransform();
         this._setState('happy', 2500);
         this._jump(-4.5);
@@ -1104,23 +1381,27 @@ export class PetActor {
         this._contextMenu.removeAll();
 
         const isPrimary = this._roster.primaryPetId === this.pet.id;
+        const isSecondary = this._roster.secondaryPetId === this.pet.id;
         const arch = getArchetype(this.pet.archetype);
-        const unlocked = arch.skills.filter(s => s.unlockLv <= this.pet.level);
+        const equipped = (this.pet.equippedSkills || []).map(id => SKILL_CATALOG[id]).filter(Boolean);
 
         const header = new PopupMenu.PopupMenuItem(
-            `${isPrimary ? '👑 ' : '🐾 '}${this.pet.name} · Lv.${this.pet.level} [${arch.badge}]`,
+            `${isPrimary ? '👑 ' : (isSecondary ? '🤝 ' : '🐾 ')}${this.pet.name} · Lv.${this.pet.level} [${arch.badge}]`,
             { reactive: false }
         );
         this._contextMenu.addMenuItem(header);
 
-        const skillSub = new PopupMenu.PopupSubMenuMenuItem(`✨ 已解锁技能 (${unlocked.length}/${arch.skills.length})`);
-        for (const sk of arch.skills) {
-            const ok = sk.unlockLv <= this.pet.level;
+        const skillSub = new PopupMenu.PopupSubMenuMenuItem(`⚡ 当前自由配招 (${equipped.length}/4 槽)`);
+        for (const sk of equipped) {
             skillSub.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-                `${ok ? '✅' : '🔒'} Lv.${sk.unlockLv} ${sk.name}`,
+                `${sk.slotType === 'ultimate' ? '🌟奥义' : '🔹主动'} · ${sk.name}`,
                 { reactive: false }
             ));
         }
+        skillSub.menu.addAction('✨ 一键智能搭配元素连携技能', () => {
+            this._roster.applyRecommendedSkills(this.pet.id, 'combo');
+            this.say(`${this.pet.name} 已换上最新元素连携配招！⚡`, 2300);
+        });
         this._contextMenu.addMenuItem(skillSub);
 
         this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -1128,29 +1409,42 @@ export class PetActor {
         if (!isPrimary) {
             this._contextMenu.addAction('👑 设为主战代表宠物', () => {
                 this._roster.setPrimaryPet(this.pet.id);
-                this.say(`${this.pet.name} 已成为主战代表！⚔️`, 2200);
+                this.say(`${this.pet.name} 已成为 1号主战代表！⚔️`, 2200);
             });
+            if (!isSecondary) {
+                this._contextMenu.addAction('🤝 设为 2号双打/援助搭档', () => {
+                    this._roster.setSecondaryPet(this.pet.id);
+                    this.say(`${this.pet.name} 已就位 2号双打搭档！🤝`, 2200);
+                });
+            }
         }
 
         const siblings = this._roster.pets.filter(p => p.id !== this.pet.id);
         if (siblings.length === 1) {
-            this._contextMenu.addAction(`⚔️ 与自家伙伴「${siblings[0].name}」切磋对战！`, () => {
+            this._contextMenu.addAction(`⚔️ 与自家伙伴「${siblings[0].name}」1v1 切磋`, () => {
                 this._roster.setPrimaryPet(this.pet.id);
-                this._callbacks.onStartPracticeBattle?.(siblings[0]);
+                this._callbacks.onStartPracticeBattle?.(siblings[0], '1v1');
             });
         } else if (siblings.length > 1) {
             const sparSub = new PopupMenu.PopupSubMenuMenuItem(`⚔️ 与自家伙伴切磋 (${siblings.length} 只可选)`);
             for (const sib of siblings) {
                 sparSub.menu.addAction(`🥊 挑战「${sib.name}」 (Lv.${sib.level})`, () => {
                     this._roster.setPrimaryPet(this.pet.id);
-                    this._callbacks.onStartPracticeBattle?.(sib);
+                    this._callbacks.onStartPracticeBattle?.(sib, '1v1');
                 });
             }
             this._contextMenu.addMenuItem(sparSub);
         }
-        this._contextMenu.addAction('🤖 开启擂台挑战赛', () => {
-            this._roster.setPrimaryPet(this.pet.id);
-            this._callbacks.onStartPracticeBattle?.(null);
+
+        this._contextMenu.addAction(
+            this._roster.pets.length >= 2 ? '⚡ 开启 2.5D 双宠 2v2 元素挑战赛' : '⚔️ 开启 2.5D 擂台挑战赛',
+            () => {
+                this._roster.setPrimaryPet(this.pet.id);
+                this._callbacks.onStartPracticeBattle?.(null, this._roster.pets.length >= 2 ? '2v2' : '1v1');
+            }
+        );
+        this._contextMenu.addAction('🐉 讨伐随机深渊 Boss (携杂兵波次)', () => {
+            this._callbacks.onStartBossRaid?.();
         });
 
         this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -1548,25 +1842,47 @@ export class PetActor {
             }
         }
 
-        const cpuPct = this._sysMonitor?.cpuPercent ?? 0;
-        const cpuFactor = 1.0 + (cpuPct / 100) * 2.1;
-        if (cpuPct >= 68 && (this._state === 'walk' || this._state === 'idle')) {
-            this._setState('run', 3200);
-            const now = Date.now();
-            if (now - this._lastCpuShoutTime > 55000 && this._slotIndex === 0) {
-                this._lastCpuShoutTime = now;
-                this.say(`${this.pet.name}：${pick(this._getQuoteSet().cpuHigh)}`, 2400);
+        // 🌱 High-CPU Eco Quiet Mode: yield 100% resources when user is compiling/rendering!
+        if (this._ecoMode) {
+            this._advanceSpriteAnimation(dtMs, 0.24); // Throttle down to ~4-5 FPS resting animation
+            this._applyPosition();
+            return;
+        }
+        const cpuFactor = 1.0;
+
+        // 👾 Top-Bar World Boss Co-op Swarm Combat!
+        if (this._worldBossTargetX !== null) {
+            this._y = bounds.groundY;
+            const offset = ((this._slotIndex % 2 === 0) ? -1 : 1) * (32 + (this._slotIndex % 3) * 14);
+            const goalX = Math.max(bounds.minX, Math.min(bounds.maxX, this._worldBossTargetX + offset));
+            const dxBoss = goalX - this._x;
+            this._facing = this._worldBossTargetX >= this._x ? 'right' : 'left';
+            if (Math.abs(dxBoss) > 12) {
+                this._x += Math.sign(dxBoss) * Math.min(Math.abs(dxBoss), 3.6);
+                this._setState('run', 1200);
+            } else {
+                if (this._state !== 'attack' && this._state !== 'cast')
+                    this._setState(this.pet.archetype === 'martial' ? 'attack' : 'cast', 1400);
+                if (this._statePhaseMs % 660 < dtMs) {
+                    const eqId = this.pet.equippedSkills?.[0];
+                    const fxId = SKILL_CATALOG[eqId]?.fxMain || CLASS_PRACTICE_FX[this.pet.archetype] || 'melee/claw-swipe';
+                    this._effects.spawnPixelFxBurst(this._worldBossTargetX, this._y + this._petH, fxId, 1);
+                    this._callbacks.onWorldBossHit?.(this.pet);
+                }
             }
+            this._advanceSpriteAnimation(dtMs, 1.3);
+            this._applyPosition();
+            return;
         }
 
         const userSpeed = this._settings.get_double('walk-speed');
         const dirSign = this._facing === 'right' ? 1 : -1;
         const surfMinX = (freeRoam && this._roamSurface === 'ledge' && this._activeLedge)
             ? this._activeLedge.x1
-            : bounds.minX;
+            : ((!freeRoam || this._roamSurface === 'topbar') ? (bounds.topBarMinX ?? bounds.minX) : bounds.minX);
         const surfMaxX = (freeRoam && this._roamSurface === 'ledge' && this._activeLedge)
             ? this._activeLedge.x2
-            : bounds.maxX;
+            : ((!freeRoam || this._roamSurface === 'topbar') ? (bounds.topBarMaxX ?? bounds.maxX) : bounds.maxX);
 
         // ---------------------------------------------------------------------
         // State Machine: Rich Icon Interactions, Duo Choreographies & Stunts!
@@ -1923,11 +2239,105 @@ export class PetActor {
                 this._setState('happy', 1000);
                 this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 16);
             }
+        } else if (this._state === 'window_parkour' && this._parkourArc) {
+            const arc = this._parkourArc;
+            const p = Math.min(1, this._statePhaseMs / arc.durMs);
+            this._x = arc.x0 + (arc.x1 - arc.x0) * p;
+            const linearY = arc.y0 + (arc.y1 - arc.y0) * p;
+            this._y = linearY - Math.sin(p * Math.PI) * 92;
+            const spinDir = arc.x1 >= arc.x0 ? 1 : -1;
+            this._actor.rotation_angle_z = 360 * p * spinDir;
+            if (p >= 1) {
+                this._resetPoseTransform();
+                this._x = arc.x1;
+                this._y = arc.y1;
+                this._roamSurface = 'ledge';
+                this._activeLedge = arc.targetLedge;
+                this._parkourArc = null;
+                this._jump(-3.2);
+                this._setState('happy', 1000);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y + 4, '🐾', 14);
+            }
+        } else if (this._state === 'window_bezel_climb' && this._bezelClimb) {
+            const bc = this._bezelClimb;
+            this._x = bc.x;
+            this._facing = bc.onLeft ? 'right' : 'left';
+            this._actor.rotation_angle_z = (bc.onLeft ? -74 : 74) + Math.sin((this._statePhaseMs / 150) * Math.PI) * 6;
+            this._y -= 2.35 * Math.max(0.7, userSpeed);
+            if (this._y <= bc.yTarget) {
+                this._resetPoseTransform();
+                this._y = bc.yTarget;
+                this._x = bc.onLeft ? bc.ledge.x1 + 8 : bc.ledge.x2 - 8;
+                this._roamSurface = 'ledge';
+                this._activeLedge = bc.ledge;
+                this._bezelClimb = null;
+                this._jump(-3.8);
+                this._setState('happy', 1100);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 14);
+            }
+        } else if (this._state === 'grapple_swing' && this._grappleArc) {
+            const ga = this._grappleArc;
+            const p = Math.min(1, this._statePhaseMs / ga.durMs);
+            const easeP = 0.5 - 0.5 * Math.cos(p * Math.PI);
+            const theta = ga.ang0 + (ga.ang1 - ga.ang0) * easeP;
+            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, ga.ax + Math.sin(theta) * ga.len - this._petW / 2));
+            this._y = Math.max(bounds.groundY, Math.min(bounds.bottomGroundY, ga.ay + Math.cos(theta) * ga.len - this._petH / 2));
+            this._actor.rotation_angle_z = -theta * 28;
+
+            if (this._grappleLine) {
+                const handX = this._x + this._petW / 2;
+                const handY = this._y + 6;
+                const dxL = handX - ga.ax;
+                const dyL = handY - ga.ay;
+                const distL = Math.max(8, Math.hypot(dxL, dyL));
+                const deg = -Math.atan2(dxL, dyL) * (180 / Math.PI);
+                this._grappleLine.set_size(2, Math.round(distL));
+                this._grappleLine.set_position(Math.round(ga.ax), Math.round(ga.ay));
+                this._grappleLine.rotation_angle_z = deg;
+            }
+
+            if (p >= 1) {
+                this._clearGrappleLine();
+                this._resetPoseTransform();
+                this._grappleArc = null;
+                this._roamSurface = 'air';
+                this._fallVy = 1.2;
+                this._setState('free_fall', 4000);
+            }
+        } else if (this._state === 'class_glider') {
+            this._x += dirSign * 3.1 * Math.max(0.75, userSpeed);
+            this._y += 1.45;
+            this._actor.rotation_angle_z = dirSign * 12 + Math.sin((this._statePhaseMs / 260) * Math.PI) * 5;
+            if (this._x <= bounds.minX + 6 || this._x >= bounds.maxX - 6)
+                this._facing = this._x <= bounds.minX + 6 ? 'right' : 'left';
+
+            const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+            const landed = ledges.find(l => this._x >= l.x1 && this._x <= l.x2 && Math.abs(this._y - l.y) <= 10);
+            if (landed && this._callbacks.canPerchOnLedge?.(landed.metaWin, this.pet.id) !== false) {
+                this._clearPropBadge();
+                this._resetPoseTransform();
+                this._y = landed.y;
+                this._roamSurface = 'ledge';
+                this._activeLedge = landed;
+                this._jump(-3.0);
+                this._setState('happy', 1000);
+            } else if (this._y >= bounds.bottomGroundY) {
+                this._clearPropBadge();
+                this._resetPoseTransform();
+                this._y = bounds.bottomGroundY;
+                this._roamSurface = 'floor';
+                this._activeLedge = null;
+                this._jump(-3.2);
+                this._setState('happy', 950);
+            }
+        } else if (this._state === 'dig_treasure') {
+            const digBob = Math.sin((this._statePhaseMs / 140) * Math.PI);
+            this._actor.set_scale(1.08, 0.90 + digBob * 0.08);
+            this._actor.rotation_angle_z = digBob * 9;
         } else if (this._state === 'wall_climb') {
             const onLeftWall = Math.abs(this._x - bounds.minX) <= 18;
             this._x = onLeftWall ? bounds.minX : bounds.maxX;
             this._facing = onLeftWall ? 'right' : 'left';
-            // Tilt paws onto the vertical screen bezel!
             this._actor.rotation_angle_z = (onLeftWall ? -78 : 78) + Math.sin((this._statePhaseMs / 150) * Math.PI) * 6;
             this._y += this._climbDirY * 2.1 * Math.max(0.7, userSpeed);
 
@@ -1955,42 +2365,52 @@ export class PetActor {
         } else if (this._state === 'peek') {
             this._actor.rotation_angle_z = Math.sin((this._statePhaseMs / 350) * Math.PI) * 9;
         } else if (this._state === 'walk' || this._state === 'run') {
-            const mult = this._state === 'run' ? 2.25 : 1.0;
+            // If assigned to Cozy Corner Campfire, stay near the warm campfire zone!
+            let activeMinX = surfMinX;
+            let activeMaxX = surfMaxX;
+            if (freeRoam && this._roamRole === 'camp_resting' && this._roamSurface === 'floor' && Number.isFinite(this._campSpotX)) {
+                activeMinX = Math.max(bounds.minX, this._campSpotX - 58);
+                activeMaxX = Math.min(bounds.maxX, this._campSpotX + 58);
+            }
+
+            const mult = this._state === 'run' ? 2.15 : 1.0;
             const pxPerTick = 1.05 * userSpeed * mult * cpuFactor;
             this._x += this._facing === 'right' ? pxPerTick : -pxPerTick;
 
-            if (this._x <= surfMinX) {
-                this._x = surfMinX;
-                if (freeRoam && this._roamSurface !== 'ledge' && Math.random() < 0.30) {
+            const allowAir = freeRoam && this._roamRole === 'active_roamer' && (this._callbacks.canTakeAirSlot?.(this.pet.id) !== false);
+
+            if (this._x <= activeMinX) {
+                this._x = activeMinX;
+                if (allowAir && this._roamSurface !== 'ledge' && Math.random() < 0.28) {
                     this._startWallClimb(bounds);
-                } else if (freeRoam && this._roamSurface === 'ledge' && Math.random() < 0.28) {
-                    this._startParachuteDive(bounds);
-                } else if (Math.random() < 0.32) {
-                    this._setState('edge_peek', 1450);
-                    if (Math.random() < 0.5) {
+                } else if (allowAir && this._roamSurface === 'ledge' && Math.random() < 0.28) {
+                    this._startClassGlider(bounds);
+                } else if (Math.random() < 0.34) {
+                    this._setState('edge_peek', 1550);
+                    if (Math.random() < 0.45) {
                         this.say(
                             this._roamSurface === 'ledge' && this._activeLedge
-                                ? `趴在「${this._activeLedge.appName}」窗口边往下看 👀`
-                                : '哇，屏幕最左边好酷呀 👀',
+                                ? `挂在「${this._activeLedge.appName}」窗口左角晃脚丫 👀✨`
+                                : '哇，最左边的风景不错呀 👀',
                             2000
                         );
                     }
                 } else {
                     this._facing = 'right';
                 }
-            } else if (this._x >= surfMaxX) {
-                this._x = surfMaxX;
-                if (freeRoam && this._roamSurface !== 'ledge' && Math.random() < 0.30) {
+            } else if (this._x >= activeMaxX) {
+                this._x = activeMaxX;
+                if (allowAir && this._roamSurface !== 'ledge' && Math.random() < 0.28) {
                     this._startWallClimb(bounds);
-                } else if (freeRoam && this._roamSurface === 'ledge' && Math.random() < 0.28) {
-                    this._startParachuteDive(bounds);
-                } else if (Math.random() < 0.32) {
-                    this._setState('edge_peek', 1450);
-                    if (Math.random() < 0.5) {
+                } else if (allowAir && this._roamSurface === 'ledge' && Math.random() < 0.28) {
+                    this._startClassGlider(bounds);
+                } else if (Math.random() < 0.34) {
+                    this._setState('edge_peek', 1550);
+                    if (Math.random() < 0.45) {
                         this.say(
                             this._roamSurface === 'ledge' && this._activeLedge
                                 ? `坐在「${this._activeLedge.appName}」窗口右上角吹风~ ✨`
-                                : '趴在最右边边往下瞄一眼 👀',
+                                : '趴在右边边往下瞄一眼 👀',
                             2000
                         );
                     }
@@ -2012,21 +2432,24 @@ export class PetActor {
 
         if (this._state === 'sleep') {
             this._sleepParticleAccMs += dtMs;
-            if (this._sleepParticleAccMs >= 3400) {
+            if (this._sleepParticleAccMs >= 4200) {
                 this._sleepParticleAccMs = 0;
                 this._effects.spawnParticle(this._x + this._petW * 0.65, this._y + 2, '💤', 20);
             }
         } else if (this._state === 'idle' || this._state === 'walk') {
+            // Dynamic chatter throttling: scale interval up when user owns many pets!
+            const totalPets = Math.max(1, this._roster.pets.filter(p => p.onTopBar !== false).length);
+            const chatterThresholdMs = 42000 + (totalPets - 1) * 14000;
             this._bubbleAccMs += dtMs;
-            if (this._bubbleAccMs >= 46000) {
+            if (this._bubbleAccMs >= chatterThresholdMs) {
                 this._bubbleAccMs = 0;
-                if (Math.random() < 0.5)
+                if (Math.random() < 0.45)
                     this.say(`${this.pet.name}：${pick(this._getQuoteSet().idle)}`, 2300);
             }
         }
 
         const speedScale = (['walk', 'run', 'raid_widget', 'hurdle', 'zoomies_skid'].includes(this._state))
-            ? Math.max(0.5, Math.min(3.2, userSpeed * 0.85 * cpuFactor))
+            ? Math.max(0.5, Math.min(3.0, userSpeed * 0.85))
             : 1.0;
         this._advanceSpriteAnimation(dtMs, speedScale);
         this._applyPosition();
@@ -2041,8 +2464,12 @@ export class PetActor {
             case 'solo_backflip':
             case 'duo_leapfrog_jumper':
             case 'wall_climb':
+            case 'window_bezel_climb':
+            case 'window_parkour':
             case 'free_fall':
                 return 'run';
+            case 'grapple_swing':
+                return 'drag';
             case 'zoomies_skid':
                 return this._statePhaseMs < 1050 ? 'run' : 'crouch';
             case 'headbutt_ram':
@@ -2053,6 +2480,8 @@ export class PetActor {
                 return this._statePhaseMs < 550 ? 'attack' : 'guard';
             case 'parachute_glide':
             case 'balloon_ascend':
+            case 'class_glider':
+            case 'dig_treasure':
             case 'duo_high_five':
             case 'duo_sync_dance':
             case 'duo_nuzzle':
@@ -2084,13 +2513,13 @@ export class PetActor {
 
     _pickNextAutonomousState(bounds) {
         this._clearPropBadge();
+        this._clearGrappleLine();
         this._resetPoseTransform();
         this._stuntTriggered = false;
         this._lastHitComboStep = -1;
 
-        // If wall-climbing finished mid-wall, glide gently to a ledge or floor!
-        if (this._state === 'wall_climb' && this._roamSurface === 'air') {
-            this._startParachuteDive(bounds);
+        if ((this._state === 'wall_climb' || this._state === 'window_bezel_climb') && this._roamSurface === 'air') {
+            this._startClassGlider(bounds, false);
             return;
         }
 
@@ -2098,8 +2527,8 @@ export class PetActor {
             'attack', 'headbutt_ram', 'backflip_off', 'sit_polish', 'sneak', 'hurdle', 'peek',
             'happy', 'cast', 'solo_backflip', 'zoomies_skid', 'screen_knock', 'edge_peek',
             'duo_high_five', 'duo_leapfrog_base', 'duo_leapfrog_jumper', 'duo_sync_dance',
-            'duo_spar_clash', 'duo_gossip', 'duo_nuzzle',
-            'parachute_glide', 'balloon_ascend', 'free_fall',
+            'duo_spar_clash', 'duo_gossip', 'duo_nuzzle', 'dig_treasure',
+            'parachute_glide', 'balloon_ascend', 'free_fall', 'window_parkour', 'grapple_swing', 'class_glider',
         ];
 
         if (nonWalkStates.includes(this._state)) {
@@ -2120,38 +2549,79 @@ export class PetActor {
 
         const freeRoam = this.isFreeRoamEnabled();
 
-        // Full-Screen Vertical Exploration Transitions (Parachute / Balloon / Window Perch / Wall Climb)!
-        if (freeRoam && bounds) {
-            const vRoll = Math.random();
-            const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+        // Cozy Campfire Resting Role (when user has > max-roaming-pets!)
+        if (freeRoam && this._roamRole === 'camp_resting') {
+            const cRoll = Math.random();
+            if (cRoll < 0.48)
+                this._setState('sleep', 9000 + Math.random() * 8000);
+            else if (cRoll < 0.78)
+                this._setState('idle', 4000 + Math.random() * 4000);
+            else
+                this._setState('walk', 3200 + Math.random() * 2800);
+            return;
+        }
 
-            if (this._roamSurface === 'topbar' && vRoll < 0.28) {
-                this._startParachuteDive(bounds);
+        // Occasional Spontaneous Treasure Digging on Top Bar, Ledge, or Floor!
+        if (Math.random() < 0.06 && this._startDigTreasure())
+            return;
+
+        // Free Roam 2.0 Rich Spatial Playground (Subject to RoamDirector Air & Ledge Quotas!)
+        const allowAir = freeRoam && this._roamRole === 'active_roamer' && (this._callbacks.canTakeAirSlot?.(this.pet.id) !== false);
+        if (allowAir && bounds) {
+            const vRoll = Math.random();
+            const allLedges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+            const availLedges = allLedges.filter(l =>
+                l.metaWin !== this._activeLedge?.metaWin &&
+                (this._callbacks.canPerchOnLedge?.(l.metaWin, this.pet.id) !== false)
+            );
+
+            if (this._roamSurface === 'topbar' && vRoll < 0.34) {
+                const modeRoll = Math.random();
+                if (availLedges.length > 0 && modeRoll < 0.35) {
+                    this._startWindowParkourLeap(pick(availLedges));
+                } else if (modeRoll < 0.62) {
+                    this._startGrappleSwing(bounds, availLedges[0] || null);
+                } else if (modeRoll < 0.84) {
+                    this._startClassGlider(bounds);
+                } else {
+                    this._startPortalHop(bounds, availLedges[0] || null);
+                }
                 return;
             }
-            if (this._roamSurface === 'floor' && vRoll < 0.30) {
-                const pickLedge = ledges.length > 0 && Math.random() < 0.65 ? pick(ledges) : null;
-                this._startBalloonAscent(bounds, pickLedge);
+
+            if (this._roamSurface === 'floor' && vRoll < 0.36) {
+                const modeRoll = Math.random();
+                if (availLedges.length > 0 && modeRoll < 0.38) {
+                    this._startWindowBezelClimb(pick(availLedges), bounds);
+                } else if (availLedges.length > 0 && modeRoll < 0.65) {
+                    this._startWindowParkourLeap(pick(availLedges));
+                } else if (modeRoll < 0.85) {
+                    this._startPortalHop(bounds, availLedges[0] || null);
+                } else {
+                    this._startBalloonAscent(bounds, availLedges[0] || null);
+                }
                 return;
             }
+
             if (this._roamSurface === 'ledge') {
                 if (vRoll < 0.22 && this._activeLedge) {
-                    // Non-destructive window inspection while perched on its titlebar!
-                    this._setState('peek', 2100);
-                    this.say(`趴在「${this._activeLedge.appName}」窗口顶上看看主人在忙啥 👀✨`, 2300);
+                    this._setState('peek', 2200);
+                    this.say(`趴在「${this._activeLedge.appName}」窗口顶上陪主人敲活儿 👀✨`, 2300);
                     return;
-                } else if (vRoll < 0.40) {
-                    if (Math.random() < 0.5)
-                        this._startBalloonAscent(bounds, null);
-                    else
-                        this._startParachuteDive(bounds);
+                } else if (vRoll < 0.48) {
+                    if (availLedges.length > 0 && Math.random() < 0.55) {
+                        this._startWindowParkourLeap(pick(availLedges));
+                    } else if (Math.random() < 0.5) {
+                        this._startGrappleSwing(bounds, null);
+                    } else {
+                        this._startClassGlider(bounds);
+                    }
                     return;
                 }
             }
         }
 
         const r = Math.random();
-        // Seek out a Top-Bar icon when walking on the Top Bar!
         if ((!freeRoam || this._roamSurface === 'topbar') && r < 0.18 && this._perception) {
             const targets = this._perception.scanLiveTargets();
             if (targets.length > 0) {
@@ -2161,7 +2631,6 @@ export class PetActor {
             }
         }
 
-        // Perform a spontaneous solo stunt / trick on any surface!
         if (r < 0.33 && bounds) {
             this._triggerSoloStunt(bounds);
             return;
@@ -2204,6 +2673,20 @@ export class PetActor {
         const drawX = Math.round(this._x + (this._lungeX || 0));
         const drawY = Math.round(this._y + (this._jumpY || 0));
         this._actor.set_position(drawX, drawY);
+
+        // Focus Safe-Zone Auto-Dimming: smoothly fade to translucent when crossing active focused window body!
+        if (!this._inArenaBattle && !this._isReleasing && !this._dragging) {
+            const baseOp = Math.max(50, Math.min(255, this._settings.get_int('pet-opacity')));
+            let targetOp = baseOp;
+            if (this.isFreeRoamEnabled() && this.isAirborneRoamState()) {
+                const ctx = this._perception?.classifyFocusedAppContext?.();
+                const r = ctx?.rect;
+                if (r && drawX > r.x + 40 && drawX < r.x + r.width - 60 && drawY > r.y + 42 && drawY < r.y + r.height - 60)
+                    targetOp = Math.min(baseOp, 110);
+            }
+            if (this._actor.opacity !== targetOp)
+                this._actor.opacity = targetOp;
+        }
 
         if (this._propBadge) {
             this._propBadge.set_position(

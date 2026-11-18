@@ -256,7 +256,12 @@ function decodeSpriteSheet(filePath, opts) {
 
     const sheet = GdkPixbuf.Pixbuf.new_from_file(filePath);
     const cols = Math.max(1, opts.cols || 4);
-    const rows = Math.max(1, opts.rows || 10);
+    let rows = Math.max(1, opts.rows || 12);
+    const cellW = Math.max(1, sheet.get_width() / cols);
+    const estSquareRows = Math.round(sheet.get_height() / cellW);
+    if ((rows === 10 || rows === 12) && (estSquareRows === 10 || estSquareRows === 12) && Math.abs((sheet.get_height() / cellW) - estSquareRows) < 0.22) {
+        rows = estSquareRows;
+    }
     const frameW = Math.max(1, Math.floor(sheet.get_width() / cols));
     const frameH = Math.max(1, Math.floor(sheet.get_height() / rows));
     const baseDelay = Math.round(1000 / Math.max(1, opts.fps || 8));
@@ -347,7 +352,7 @@ function compileStateFrames(rawFrames, targetHeight, interpType, baseFacingRight
  */
 export function loadSpriteBankForProfile(extensionPath, profile = {}, renderOpts = {}) {
     const mode = profile.skinMode || 'preset';
-    const targetHeight = Math.max(16, Math.min(96, renderOpts.targetHeight || 32));
+    const targetHeight = Math.max(16, Math.min(112, renderOpts.targetHeight || 32));
     const pixelCrisp = renderOpts.pixelCrisp !== false;
     const interp = pixelCrisp ? GdkPixbuf.InterpType.NEAREST : GdkPixbuf.InterpType.BILINEAR;
     let baseFacingRight = profile.baseFacingRight !== false;

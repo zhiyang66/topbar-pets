@@ -12,28 +12,62 @@ import {
     xpRequiredForLevel,
     getArchetype,
 } from './rpg.js';
+import {
+    SKILL_CATALOG,
+    ALL_SKILL_IDS,
+    getAvailableSkillsForPet,
+    normalizeSkillLoadout,
+    recommendSkillLoadout,
+} from './skillSystem.js';
+import {
+    RELIC_CATALOG,
+    ALL_RELIC_IDS,
+    TACTICAL_STANCES,
+    ACHIEVEMENT_CATALOG,
+} from './relicsAndAchievements.js';
 import { UpdateChecker, RELEASES_PAGE_URL } from './updateChecker.js';
 
 const ARCHETYPE_LIST = Object.values(CLASS_ARCHETYPES);
+const STANCE_LIST = Object.values(TACTICAL_STANCES);
 
 function readRosterState(settings) {
     try {
         const raw = settings.get_string('roster-json');
         if (raw) {
             const parsed = JSON.parse(raw);
+            const pool = Array.isArray(parsed.unlockedSkillPool) ? parsed.unlockedSkillPool : [];
             if (Array.isArray(parsed.pets) && parsed.pets.length > 0) {
-                const pets = parsed.pets.map(p => createNewPetRecord(p));
+                const pets = parsed.pets.map(p => createNewPetRecord(p, pool));
                 let primaryPetId = parsed.primaryPetId || pets[0].id;
                 if (!pets.some(p => p.id === primaryPetId))
                     primaryPetId = pets[0].id;
-                return { primaryPetId, pets };
+                return {
+                    ...parsed,
+                    coins: Math.max(0, Number(parsed.coins ?? 85)),
+                    unlockedSkillPool: pool,
+                    relicInventory: Array.isArray(parsed.relicInventory) ? parsed.relicInventory : ['fang_charm'],
+                    unlockedAchievements: Array.isArray(parsed.unlockedAchievements) ? parsed.unlockedAchievements : [],
+                    equippedTitle: String(parsed.equippedTitle || ''),
+                    primaryPetId,
+                    pets,
+                };
             }
         }
     } catch (_e) {
         // Ignore parse error
     }
     const starter = createNewPetRecord({ name: '团子', presetId: 'cat', archetype: 'martial' });
-    return { primaryPetId: starter.id, pets: [starter] };
+    return {
+        primaryPetId: starter.id,
+        secondaryPetId: '',
+        coins: 85,
+        unlockedSkillPool: ['m1'],
+        relicInventory: ['fang_charm'],
+        activeEgg: null,
+        unlockedAchievements: [],
+        equippedTitle: '',
+        pets: [starter],
+    };
 }
 
 function writeRosterState(settings, state) {
@@ -131,11 +165,11 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
     const adoptDraft = {
         name: '新伙伴',
         archetypeIdx: 1, // fire
-        skinModeIdx: 0,  // 0: preset, 1: spritesheet (AI 10x4), 2: gif
+        skinModeIdx: 0,  // 0: preset, 1: spritesheet (AI 12x4), 2: gif
         presetIdx: 4,    // dragon
         customPath: '',
         cols: 4,
-        rows: 10,
+        rows: 12,
         autoRemoveBg: true,
     };
 
@@ -288,7 +322,7 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
             // 4. Quick Skin Changer for this Pet
             const skinModel = Gtk.StringList.new([
                 ...SPECIES_PRESETS.map(s => `内置 · ${s.label}`),
-                '自定义 · AI 精灵图 (10行×4列 PNG)',
+                '自定义 · AI 精灵图 (12行×4列 PNG，兼容 10行)',
                 '自定义 · GIF 动图',
             ]);
             const skinCombo = new Adw.ComboRow({
@@ -324,7 +358,7 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
                             t2.skinMode = chosenMode;
                             t2.customPath = path;
                             t2.cols = 4;
-                            t2.rows = chosenMode === 'spritesheet' ? 10 : 1;
+                            t2.rows = chosenMode === 'spritesheet' ? 12 : 1;
                             t2.autoRemoveBg = true;
                             writeRosterState(settings, st2);
                             rebuildSquadPage();
@@ -476,7 +510,7 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
         adoptGroup.add(colsRow);
 
         const rowsRow = new Adw.SpinRow({
-            title: '精灵图总行数 (AI 提示词标准为 10 行)',
+            title: '精灵图总行数 (AI 提示词标准为 12 行，自动兼容 10 行)',
             adjustment: new Gtk.Adjustment({ lower: 1, upper: 32, step_increment: 1, value: adoptDraft.rows }),
             visible: adoptDraft.skinModeIdx === 1,
         });
@@ -548,8 +582,8 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
     });
 
     const aiInputGroup = new Adw.PreferencesGroup({
-        title: '✨ AI 自定义宠物精灵图提示词生成器',
-        description: '输入你想要的宠物形象，自动生成严格符合本插件「10行×4列战斗+施法+日常动作规范」的中英文提示词！发给 Gemini / ChatGPT / Midjourney 生成图片后，在第一页选「AI 生成精灵图」导入即可自动去白底变成透明宠物！',
+        title: '✨ AI 自定义宠物精灵图提示词生成器 (12行×4列 · 跨系通用施法规范)',
+        description: '输入你想要的宠物形象，自动生成严格对齐本插件「12行×4列（含下蹲潜避、格挡弹反、跑酷摆荡与跨流派通用施法姿态）」的中英文提示词！发给 Gemini / ChatGPT / Midjourney 生成单张 PNG 后，在第一页选「自定义 AI 精灵图」导入即可自动边缘抠图变透明！',
     });
 
     const subjectRow = new Adw.EntryRow({
@@ -572,7 +606,7 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
     pageAi.add(aiInputGroup);
 
     const promptPreviewGroup = new Adw.PreferencesGroup({
-        title: '生成的标准 10 态动作精灵图提示词（含施放技能 / 拳打脚踢 / 受击 / 潜行）',
+        title: '生成的标准 12 态动作精灵图提示词（完美兼容跨流派自由配招与 2.5D 透明战场）',
     });
 
     const promptView = new Gtk.TextView({
@@ -631,6 +665,274 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
 
     pageAi.add(promptPreviewGroup);
     window.add(pageAi);
+
+    // =========================================================================
+    // TAB 3: ⚡ 4槽自由配招 · 圣物构筑 · 战术性格 · 成就头衔工坊 (Build Workshop)
+    // =========================================================================
+    const pageBuild = new Adw.PreferencesPage({
+        title: '配招·圣物·成就',
+        icon_name: 'applications-games-symbolic',
+    });
+
+    let gachaGroup = null;
+    let loadoutGroup = null;
+    let achGroup = null;
+
+    const rebuildBuildPage = () => {
+        if (gachaGroup) pageBuild.remove(gachaGroup);
+        if (loadoutGroup) pageBuild.remove(loadoutGroup);
+        if (achGroup) pageBuild.remove(achGroup);
+
+        const state = readRosterState(settings);
+        const ownedRelics = new Set(state.relicInventory || []);
+
+        gachaGroup = new Adw.PreferencesGroup({
+            title: `🎒 资源工坊  ·  当前金币: ${state.coins}🪙  ·  已收集圣物: ${ownedRelics.size}/${ALL_RELIC_IDS.length}  ·  跨系技能库: ${state.unlockedSkillPool.length}/${ALL_SKILL_IDS.length}`,
+            description: '金币可通过桌面宠物自动挖宝、写代码陪伴、25分钟番茄钟远征、击败世界Boss与擂台切磋获得！',
+        });
+
+        const shopRow = new Adw.ActionRow({
+            title: '祈愿抽圣物 / 研读跨流派技能秘籍 / 购买神秘宠物蛋',
+            subtitle: state.activeEgg ? `🥚 当前有神秘蛋正在零遮挡孵化中 (${state.activeEgg.progress}%)` : '神秘蛋孵化满 100% 必诞生携带稀有天生词条的新伙伴！',
+        });
+        const shopBtns = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6, valign: Gtk.Align.CENTER });
+        const rollRelicBtn = new Gtk.Button({ label: '🎲 抽圣物 (45🪙)', css_classes: ['suggested-action'] });
+        const rollScrollBtn = new Gtk.Button({ label: '📜 悟秘籍 (50🪙)' });
+        const buyEggBtn = new Gtk.Button({ label: state.activeEgg ? `🥚 加速孵化 (15🪙)` : '🥚 购神秘蛋 (60🪙)' });
+
+        rollRelicBtn.connect('clicked', () => {
+            const st = readRosterState(settings);
+            const unowned = ALL_RELIC_IDS.filter(id => !st.relicInventory.includes(id));
+            if (unowned.length === 0 || st.coins < 45)
+                return;
+            st.coins -= 45;
+            const pickId = unowned[Math.floor(Math.random() * unowned.length)];
+            st.relicInventory.push(pickId);
+            const prim = st.pets.find(p => p.id === st.primaryPetId) || st.pets[0];
+            if (prim && prim.relicIds.length < 3 && !prim.relicIds.includes(pickId))
+                prim.relicIds.push(pickId);
+            writeRosterState(settings, st);
+            rebuildBuildPage();
+        });
+
+        rollScrollBtn.connect('clicked', () => {
+            const st = readRosterState(settings);
+            const locked = ALL_SKILL_IDS.filter(id => !st.unlockedSkillPool.includes(id));
+            if (locked.length === 0 || st.coins < 50)
+                return;
+            st.coins -= 50;
+            st.unlockedSkillPool.push(locked[Math.floor(Math.random() * locked.length)]);
+            writeRosterState(settings, st);
+            rebuildBuildPage();
+        });
+
+        buyEggBtn.connect('clicked', () => {
+            const st = readRosterState(settings);
+            if (st.activeEgg) {
+                if (st.coins < 15)
+                    return;
+                st.coins -= 15;
+                st.activeEgg.progress = Math.min(99, (st.activeEgg.progress || 0) + 25);
+            } else {
+                if (st.coins < 60)
+                    return;
+                st.coins -= 60;
+                const sp = SPECIES_PRESETS[Math.floor(Math.random() * SPECIES_PRESETS.length)];
+                st.activeEgg = { progress: 10, presetId: sp.id };
+            }
+            writeRosterState(settings, st);
+            rebuildBuildPage();
+        });
+
+        shopBtns.append(rollRelicBtn);
+        shopBtns.append(rollScrollBtn);
+        shopBtns.append(buyEggBtn);
+        shopRow.add_suffix(shopBtns);
+        gachaGroup.add(shopRow);
+        pageBuild.add(gachaGroup);
+
+        // Per-Pet 4-Slot Custom Skill Loadout, Tactical Stance & 3-Slot Relics
+        loadoutGroup = new Adw.PreferencesGroup({
+            title: '⚡ 宠物 4 槽跨流派自由配招与战前策略构筑 (100% 自动战斗驱动)',
+            description: '每只宠物可自由混搭 3 个主动技能 + 1 个奥义大招（本流派技能享 +15% 威力专精加成），并配置赛前战术性格与 3 件圣物！',
+        });
+
+        state.pets.forEach((pet, pIdx) => {
+            const isMain = pet.id === state.primaryPetId;
+            const isSec = pet.id === state.secondaryPetId;
+            const arch = getArchetype(pet.archetype);
+            const availSkills = getAvailableSkillsForPet(pet, state.unlockedSkillPool);
+            const availActives = availSkills.filter(s => s.slotType === 'active');
+            const availUlts = availSkills.filter(s => s.slotType === 'ultimate');
+            const normLoadout = normalizeSkillLoadout(pet, state.unlockedSkillPool);
+
+            const exp = new Adw.ExpanderRow({
+                title: `${isMain ? '👑 1号主战 · ' : (isSec ? '🤝 2号双打 · ' : '🐾 ')}${pet.name} (Lv.${pet.level} ${arch.badge})`,
+                subtitle: `配招: ${normLoadout.map(id => SKILL_CATALOG[id]?.name).filter(Boolean).join(' / ')}`,
+                expanded: pIdx < 2,
+            });
+
+            // Recommend One-Click Row
+            const recRow = new Adw.ActionRow({
+                title: '✨ 一键智能配招方案',
+                subtitle: '自动根据 2v2 搭档元素搭配高爆元素连携技能组',
+            });
+            const recBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 6, valign: Gtk.Align.CENTER });
+            for (const [styleKey, styleLabel] of [['combo', '💥 元素连携流'], ['burst', '🔥 极限爆发流'], ['sustain', '🛡️ 吸血控制流']]) {
+                const b = new Gtk.Button({ label: styleLabel });
+                b.connect('clicked', () => {
+                    const st = readRosterState(settings);
+                    const target = st.pets.find(x => x.id === pet.id);
+                    const partner = st.pets.find(x => x.id !== pet.id);
+                    if (target) {
+                        target.equippedSkills = recommendSkillLoadout(target, styleKey, st.unlockedSkillPool, partner?.archetype || null);
+                        writeRosterState(settings, st);
+                        rebuildBuildPage();
+                    }
+                });
+                recBox.append(b);
+            }
+            recRow.add_suffix(recBox);
+            exp.add_row(recRow);
+
+            // Tactical AI Stance Row
+            const stanceCombo = new Adw.ComboRow({
+                title: '🧠 自动战斗 AI 战术性格倾向',
+                model: Gtk.StringList.new(STANCE_LIST.map(s => `${s.label} — ${s.desc}`)),
+            });
+            const curStIdx = Math.max(0, STANCE_LIST.findIndex(s => s.id === (pet.stance || 'balanced')));
+            stanceCombo.set_selected(curStIdx);
+            stanceCombo.connect('notify::selected', () => {
+                const chosenSt = STANCE_LIST[stanceCombo.get_selected()];
+                if (!chosenSt) return;
+                const st = readRosterState(settings);
+                const target = st.pets.find(x => x.id === pet.id);
+                if (target && target.stance !== chosenSt.id) {
+                    target.stance = chosenSt.id;
+                    writeRosterState(settings, st);
+                }
+            });
+            exp.add_row(stanceCombo);
+
+            // 3 Active Skill Slots + 1 Ultimate Slot
+            for (let slot = 0; slot < 3; slot++) {
+                if (availActives.length === 0) break;
+                const curId = normLoadout[slot] || availActives[0].id;
+                const skCombo = new Adw.ComboRow({
+                    title: `🔹 主动技能槽 #${slot + 1}`,
+                    model: Gtk.StringList.new(availActives.map(s => `[${getArchetype(s.school).badge}] ${s.name} — ${s.desc}`)),
+                });
+                skCombo.set_selected(Math.max(0, availActives.findIndex(s => s.id === curId)));
+                skCombo.connect('notify::selected', () => {
+                    const picked = availActives[skCombo.get_selected()];
+                    if (!picked) return;
+                    const st = readRosterState(settings);
+                    const target = st.pets.find(x => x.id === pet.id);
+                    if (target) {
+                        const nextArr = [...normalizeSkillLoadout(target, st.unlockedSkillPool)];
+                        nextArr[slot] = picked.id;
+                        target.equippedSkills = normalizeSkillLoadout({ ...target, equippedSkills: nextArr }, st.unlockedSkillPool);
+                        writeRosterState(settings, st);
+                        rebuildBuildPage();
+                    }
+                });
+                exp.add_row(skCombo);
+            }
+
+            if (availUlts.length > 0) {
+                const curUltId = normLoadout.find(id => SKILL_CATALOG[id]?.slotType === 'ultimate') || availUlts[0].id;
+                const ultCombo = new Adw.ComboRow({
+                    title: '🌟 奥义大招槽 (怒气满释放)',
+                    model: Gtk.StringList.new(availUlts.map(s => `[${getArchetype(s.school).badge}] ${s.name} — ${s.desc}`)),
+                });
+                ultCombo.set_selected(Math.max(0, availUlts.findIndex(s => s.id === curUltId)));
+                ultCombo.connect('notify::selected', () => {
+                    const picked = availUlts[ultCombo.get_selected()];
+                    if (!picked) return;
+                    const st = readRosterState(settings);
+                    const target = st.pets.find(x => x.id === pet.id);
+                    if (target) {
+                        const activesOnly = normalizeSkillLoadout(target, st.unlockedSkillPool).filter(id => SKILL_CATALOG[id]?.slotType !== 'ultimate');
+                        target.equippedSkills = [...activesOnly.slice(0, 3), picked.id];
+                        writeRosterState(settings, st);
+                        rebuildBuildPage();
+                    }
+                });
+                exp.add_row(ultCombo);
+            }
+
+            // 3 Relic Slots
+            const relicChoices = [{ id: '', label: '（未装备）' }, ...(state.relicInventory || []).map(id => RELIC_CATALOG[id]).filter(Boolean).map(r => ({ id: r.id, label: `${r.icon} ${r.name} — ${r.desc}` }))];
+            for (let rSlot = 0; rSlot < 3; rSlot++) {
+                const curRelic = (pet.relicIds || [])[rSlot] || '';
+                const rCombo = new Adw.ComboRow({
+                    title: `💎 圣物槽 #${rSlot + 1}`,
+                    model: Gtk.StringList.new(relicChoices.map(c => c.label)),
+                });
+                rCombo.set_selected(Math.max(0, relicChoices.findIndex(c => c.id === curRelic)));
+                rCombo.connect('notify::selected', () => {
+                    const picked = relicChoices[rCombo.get_selected()];
+                    const st = readRosterState(settings);
+                    const target = st.pets.find(x => x.id === pet.id);
+                    if (target) {
+                        const arr = [target.relicIds?.[0] || '', target.relicIds?.[1] || '', target.relicIds?.[2] || ''];
+                        arr[rSlot] = picked?.id || '';
+                        target.relicIds = Array.from(new Set(arr.filter(Boolean)));
+                        writeRosterState(settings, st);
+                    }
+                });
+                exp.add_row(rCombo);
+            }
+
+            if (!isMain && !isSec) {
+                const secRow = new Adw.ActionRow({ title: '🤝 设为 2号双打/场边援助搭档' });
+                const secBtn = new Gtk.Button({ label: '设为 2号位', valign: Gtk.Align.CENTER });
+                secBtn.connect('clicked', () => {
+                    const st = readRosterState(settings);
+                    st.secondaryPetId = pet.id;
+                    writeRosterState(settings, st);
+                    rebuildBuildPage();
+                });
+                secRow.add_suffix(secBtn);
+                exp.add_row(secRow);
+            }
+
+            loadoutGroup.add(exp);
+        });
+        pageBuild.add(loadoutGroup);
+
+        // Achievements & LAN Honor Titles
+        achGroup = new Adw.PreferencesGroup({
+            title: `🏆 成就图鉴与联机荣耀头衔 (已解锁 ${(state.unlockedAchievements || []).length}/${ACHIEVEMENT_CATALOG.length})`,
+            description: '佩戴头衔后将自动同步展示在局域网好友屏幕的宠物名牌上！',
+        });
+        const unlockedSet = new Set(state.unlockedAchievements || []);
+        const titleChoices = [{ id: '', label: '（不佩戴头衔）' }, ...ACHIEVEMENT_CATALOG.filter(a => unlockedSet.has(a.id)).map(a => ({ id: a.id, label: a.title }))];
+        const titleCombo = new Adw.ComboRow({
+            title: '🌐 当前佩戴的联机头衔',
+            model: Gtk.StringList.new(titleChoices.map(t => t.label)),
+        });
+        titleCombo.set_selected(Math.max(0, titleChoices.findIndex(t => t.id === (state.equippedTitle || ''))));
+        titleCombo.connect('notify::selected', () => {
+            const picked = titleChoices[titleCombo.get_selected()];
+            const st = readRosterState(settings);
+            st.equippedTitle = picked?.id || '';
+            writeRosterState(settings, st);
+        });
+        achGroup.add(titleCombo);
+
+        for (const ach of ACHIEVEMENT_CATALOG) {
+            const ok = unlockedSet.has(ach.id);
+            achGroup.add(new Adw.ActionRow({
+                title: `${ok ? '✅' : '🔒'} 【${ach.title}】`,
+                subtitle: ach.desc,
+            }));
+        }
+        pageBuild.add(achGroup);
+    };
+
+    rebuildBuildPage();
+    window.add(pageBuild);
 
     // =========================================================================
     // TAB 3: ⚔️ 6 大职业流派与 36 技能图鉴 (PixelFX Skill Codex)
@@ -692,10 +994,25 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
         key: 'pets-visible',
     }));
     dispGroup.add(createSwitchRow({
-        title: '允许移动到屏幕任意区域 (全屏非破坏性互动)',
-        subtitle: '开启后宠物可跳伞、乘气球、攀爬屏幕边框、在打开的窗口标题栏驻足跟随，并与局域网伙伴同步 2D 位置（纯视觉零遮挡输入）',
+        title: '允许移动到屏幕任意区域 (全屏自由漫游 2.0)',
+        subtitle: '支持跨窗抛物线跑酷、攀爬窗口边框、像素抓钩摆荡、传送门与角落篝火露营；飞经当前焦点窗口内部时自动半透明避让',
         settings,
         key: 'free-roam-enabled',
+    }));
+    dispGroup.add(createSpinRow({
+        title: '同屏活跃漫游宠物上限 (防满屏乱飞管制)',
+        subtitle: '超出该数量的宠物将自动分配至顶部栏巡逻或屏幕底角篝火营地轮班小憩 (每3分钟换班)',
+        settings,
+        key: 'max-roaming-pets',
+        min: 1,
+        max: 12,
+        step: 1,
+    }));
+    dispGroup.add(createSwitchRow({
+        title: '允许顶部栏世界 Boss 定时入侵',
+        subtitle: '关闭后仅在菜单手动吹响号角时才会召唤世界 Boss（高 CPU 负载与番茄钟期间也会自动暂停刷新）',
+        settings,
+        key: 'world-boss-enabled',
     }));
     dispGroup.add(createSpinRow({ title: '宠物高度尺寸 (px)', subtitle: '支持滚轮实时缩放', settings, key: 'pet-size', min: 18, max: 64, step: 2 }));
     dispGroup.add(createSpinRow({ title: '移动速度倍率', settings, key: 'walk-speed', min: 0.3, max: 3.0, step: 0.1, digits: 1 }));

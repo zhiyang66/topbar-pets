@@ -28,8 +28,10 @@ export function addChromeActor(actor, { interactive = false, trackFullscreen = t
 }
 
 export function removeChromeActor(actor) {
-    if (actor && actor.get_parent())
+    if (actor && actor.get_parent()) {
+        actor.hide();
         Main.layoutManager.removeChrome(actor);
+    }
 }
 
 /**

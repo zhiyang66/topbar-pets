@@ -3,10 +3,11 @@ import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { addChromeActor, removeChromeActor, boxLayoutProps } from './compat.js';
-import { PixelFxSurface } from './pixelfx/bridge.js';
+import { PixelFxSurface, FX_MODULES } from './pixelfx/bridge.js';
 
 /**
- * Manages non-intrusive visual effects (PixelFX bursts, Level-Up toast, particles, widget recoil & bubbles).
+ * Manages non-intrusive visual effects (PixelFX bursts, Level-Up / Achievement / Quest toasts,
+ * particles, widget recoil & crowd-throttled 2D anti-overlap speech bubbles).
  */
 export class EffectsManager {
     constructor() {
@@ -16,8 +17,22 @@ export class EffectsManager {
         this._bubbles = new Map(); // ownerKey -> { actor, getAnchorRect, createdAt, timerId }
         this._bubbleLayoutTimerId = 0;
         this._bubbleSeq = 0;
+        this._maxConcurrentBubbles = 2;
+        this._ecoMode = false;
         this._levelToast = null;
         this._levelToastTimerId = 0;
+    }
+
+    setEcoMode(enabled) {
+        this._ecoMode = Boolean(enabled);
+    }
+
+    isEcoMode() {
+        return this._ecoMode;
+    }
+
+    setMaxConcurrentBubbles(limit = 2) {
+        this._maxConcurrentBubbles = Math.max(1, Math.min(4, Number(limit) || 2));
     }
 
     destroy() {
@@ -48,14 +63,14 @@ export class EffectsManager {
 
         for (const p of this._particles) {
             p.remove_all_transitions();
-            removeChromeActor(p);
-            p.destroy();
+            if (p.get_parent())
+                p.destroy();
         }
         this._particles.clear();
     }
 
     joltPanelWidget(widget, dirSign = 1) {
-        if (!widget || !widget.get_stage?.())
+        if (this._ecoMode || !widget || !widget.get_stage?.())
             return;
 
         const prevTimer = this._shakenWidgets.get(widget);
@@ -95,42 +110,60 @@ export class EffectsManager {
     }
 
     spawnParticle(x, y, symbol = '❤️', rise = 24) {
-        const label = new St.Label({
-            text: symbol,
-            style_class: 'topbar-pet-particle',
-            reactive: false,
-            opacity: 255,
-        });
+        if (this._ecoMode || !Main.layoutManager?.uiGroup)
+            return;
 
+        // Reuse pooled St.Label on uiGroup: zero addChrome/destroy churn & zero St/Clutter warnings!
+        let label = null;
+        for (const cand of this._particles) {
+            if (!cand._busy && cand.get_stage?.()) {
+                label = cand;
+                break;
+            }
+        }
+        if (!label) {
+            if (this._particles.size >= 18)
+                return;
+            label = new St.Label({
+                text: String(symbol || '✨'),
+                style_class: 'topbar-pet-particle',
+                reactive: false,
+                visible: false,
+            });
+            label._busy = false;
+            label.connect('destroy', () => {
+                this._particles.delete(label);
+            });
+            Main.layoutManager.uiGroup.add_child(label);
+            this._particles.add(label);
+        }
+
+        label.remove_all_transitions();
+        label._busy = true;
+        label.text = String(symbol || '✨');
+        label.opacity = 255;
         const jitterX = Math.round((Math.random() - 0.5) * 18);
         label.set_position(Math.round(x + jitterX), Math.round(y));
-        label.connect('destroy', () => {
-            this._particles.delete(label);
-        });
-
-        addChromeActor(label, {
-            interactive: false,
-            trackFullscreen: true,
-        });
-        this._particles.add(label);
+        label.show();
 
         label.ease({
             y: Math.round(y - rise),
             x: Math.round(x + jitterX * 1.5),
             opacity: 0,
-            duration: 900,
+            duration: 860,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             onComplete: () => {
                 if (this._particles.has(label)) {
-                    this._particles.delete(label);
-                    removeChromeActor(label);
-                    label.destroy();
+                    label._busy = false;
+                    label.hide();
                 }
             },
         });
     }
 
     spawnBurst(x, y, symbols = ['❤️', '✨'], count = 3) {
+        if (this._ecoMode)
+            return;
         for (let i = 0; i < count; i++) {
             const sym = symbols[i % symbols.length];
             const ox = (i - (count - 1) / 2) * 10;
@@ -139,13 +172,28 @@ export class EffectsManager {
     }
 
     /**
-     * Play a compact 1x patch-gg/pixelfx effect on the desktop stage!
+     * Play a crisp patch-gg/pixelfx effect on the desktop stage (100% click-through).
+     * Automatically adapts canvas size to the FX module's metadata so wide banners/coins never clip!
      */
-    spawnPixelFxBurst(centerX, footY, fxId = 'ui/level-up', pixelScale = 1) {
-        const logW = 92;
-        const logH = 92;
+    spawnPixelFxBurst(centerX, footY, fxId = 'ui/level-up', pixelScale = 1, extraOpts = {}) {
+        if (this._ecoMode)
+            return;
+        const mod = FX_MODULES[fxId];
+        if (!mod)
+            return;
+
+        const metaW = Number(mod.meta?.size?.[0]) || 96;
+        const metaH = Number(mod.meta?.size?.[1]) || 96;
+        const origX = Number(mod.meta?.origin?.[0]) || Math.round(metaW / 2);
+        const origY = Number(mod.meta?.origin?.[1]) || Math.round(metaH * 0.75);
+
+        const logW = Math.max(92, metaW + 16);
+        const logH = Math.max(92, metaH + 16);
+        const spawnX = Math.round(logW / 2);
+        const spawnY = Math.min(logH - 8, Math.max(24, origY + 8));
+
         const surf = new PixelFxSurface(logW, logH, pixelScale);
-        if (!surf.spawn(fxId, { x: logW / 2, y: Math.round(logH * 0.72) }))
+        if (!surf.spawn(fxId, { x: spawnX, y: spawnY, ...extraOpts }))
             return;
 
         const widget = new St.Widget({
@@ -156,7 +204,7 @@ export class EffectsManager {
         widget.set_content(surf.content);
         widget.set_position(
             Math.round(centerX - surf.displayW / 2),
-            Math.max(0, Math.round(footY - surf.displayH * 0.72))
+            Math.max(0, Math.round(footY - spawnY * pixelScale))
         );
 
         addChromeActor(widget, { interactive: false, trackFullscreen: true });
@@ -171,7 +219,8 @@ export class EffectsManager {
         });
         this._fxBursts.add(entry);
 
-        entry.timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+        const fxPriority = (Clutter.PRIORITY_REDRAW || 150) + 15;
+        entry.timerId = GLib.timeout_add(fxPriority, 33, () => {
             if (!entry.widget || !surf.step(0.033)) {
                 entry.timerId = 0;
                 this._fxBursts.delete(entry);
@@ -187,10 +236,7 @@ export class EffectsManager {
         });
     }
 
-    /**
-     * Show a prominent golden Level-Up Notification Banner below the center of the Top Bar!
-     */
-    showLevelUpToast(pet, archBadge, unlockedSkills = []) {
+    showBannerToast(titleText, subText, fxId = null, durationMs = 4200) {
         this._clearLevelToast();
 
         const box = new St.BoxLayout(boxLayoutProps(true, {
@@ -200,15 +246,11 @@ export class EffectsManager {
         }));
 
         const title = new St.Label({
-            text: `🎉 升级提示！「${pet.name}」升至 Lv.${pet.level} [${archBadge}]`,
+            text: titleText,
             style_class: 'topbar-pet-levelup-title',
         });
-
-        const skillStr = unlockedSkills.length > 0
-            ? `  ·  ✨解锁新技能：${unlockedSkills.map(s => `【${s.name}】`).join(' ')}`
-            : '';
         const sub = new St.Label({
-            text: `最大生命与攻击力全面成长！${skillStr}`,
+            text: subText,
             style_class: 'topbar-pet-levelup-sub',
         });
 
@@ -228,6 +270,10 @@ export class EffectsManager {
         const ph = panelBox?.height || 32;
         const [, natW] = box.get_preferred_width(-1);
         const w = Math.max(260, natW);
+        const centerX = Math.round(px + pw / 2);
+
+        if (fxId && !this._ecoMode)
+            this.spawnPixelFxBurst(centerX, py + ph + 54, fxId, 1);
 
         box.set_position(Math.round(px + (pw - w) / 2), py + ph + 8);
         box.ease({
@@ -237,7 +283,7 @@ export class EffectsManager {
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
 
-        this._levelToastTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 4500, () => {
+        this._levelToastTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, durationMs, () => {
             this._levelToastTimerId = 0;
             if (!this._levelToast)
                 return GLib.SOURCE_REMOVE;
@@ -247,12 +293,42 @@ export class EffectsManager {
                 duration: 320,
                 mode: Clutter.AnimationMode.EASE_IN_QUAD,
                 onComplete: () => {
-                    if (this._levelToast === dying)
-                        this._clearLevelToast();
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                        if (this._levelToast === dying)
+                            this._clearLevelToast();
+                        return GLib.SOURCE_REMOVE;
+                    });
                 },
             });
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    showLevelUpToast(pet, archBadge, unlockedSkills = []) {
+        const skillStr = unlockedSkills.length > 0
+            ? `  ·  ✨解锁新技能：${unlockedSkills.map(s => `【${s.name}】`).join(' ')}`
+            : '';
+        this.showBannerToast(
+            `🎉 升级提示！「${pet.name}」升至 Lv.${pet.level} [${archBadge}]`,
+            `最大生命与攻击力成长，可在配招工坊自由混搭！${skillStr}`,
+            null,
+            4400
+        );
+    }
+
+    showAchievementToast(ach) {
+        if (!ach)
+            return;
+        this.showBannerToast(
+            `🏆 解锁荣耀成就 · 【${ach.title}】！`,
+            `${ach.desc}（已可在设置/菜单佩戴该联机头衔 ✨）`,
+            'ui/achievement',
+            4800
+        );
+    }
+
+    showQuestCompleteToast(titleText, subText) {
+        this.showBannerToast(titleText, subText, 'ui/quest-complete', 5200);
     }
 
     _clearLevelToast() {
@@ -268,10 +344,27 @@ export class EffectsManager {
         }
     }
 
-    showBubble(getAnchorRect, text, durationMs = 2600, ownerKey = 'default') {
+    showBubble(getAnchorRect, text, durationMs = 2600, ownerKey = 'default', highPriority = false) {
         if (Main.layoutManager._startingUp)
             return;
+        if (this._ecoMode && !highPriority)
+            return;
+
         this._clearBubbleByKey(ownerKey);
+
+        // Enforce strict crowd-governance concurrent bubble limit (default max 2 on screen!)
+        if (this._bubbles.size >= this._maxConcurrentBubbles) {
+            let oldestKey = null;
+            let oldestSeq = Infinity;
+            for (const [k, v] of this._bubbles.entries()) {
+                if (v.createdAt < oldestSeq) {
+                    oldestSeq = v.createdAt;
+                    oldestKey = k;
+                }
+            }
+            if (oldestKey)
+                this._clearBubbleByKey(oldestKey);
+        }
 
         const bubble = new St.Label({
             text,
@@ -325,8 +418,11 @@ export class EffectsManager {
                 duration: 240,
                 mode: Clutter.AnimationMode.EASE_IN_QUAD,
                 onComplete: () => {
-                    if (this._bubbles.get(ownerKey) === entry)
-                        this._clearBubbleByKey(ownerKey);
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                        if (this._bubbles.get(ownerKey) === entry)
+                            this._clearBubbleByKey(ownerKey);
+                        return GLib.SOURCE_REMOVE;
+                    });
                 },
             });
             return GLib.SOURCE_REMOVE;
@@ -346,11 +442,6 @@ export class EffectsManager {
         });
     }
 
-    /**
-     * Multi-Bubble Collision Avoidance Solver:
-     * 1) Tries gentle left/right horizontal separation when two nearby pets speak at once;
-     * 2) Automatically cascades overlapping bubbles downward into clean vertical rows so text NEVER overlaps!
-     */
     _layoutAllBubbles() {
         const panelBox = Main.layoutManager?.panelBox;
         const panelX = panelBox?.x ?? 0;
@@ -396,18 +487,17 @@ export class EffectsManager {
         if (items.length === 0)
             return;
 
-        // First compute ideal centered X, with gentle left/right outward bias if multiple bubbles are close!
         if (items.length >= 2) {
             const byX = [...items].sort((a, b) => a.anchorCenterX - b.anchorCenterX);
             for (let i = 0; i < byX.length; i++) {
                 const cur = byX[i];
-                let bias = 0.5; // centered
+                let bias = 0.5;
                 const prev = byX[i - 1];
                 const next = byX[i + 1];
                 if (next && Math.abs(next.anchorCenterX - cur.anchorCenterX) < 220)
-                    bias = 0.72; // shift left pet's bubble slightly left
+                    bias = 0.72;
                 else if (prev && Math.abs(cur.anchorCenterX - prev.anchorCenterX) < 220)
-                    bias = 0.28; // shift right pet's bubble slightly right
+                    bias = 0.28;
 
                 const minX = panelX + 6;
                 const maxX = Math.max(minX + 16, panelX + panelW - cur.w - 6);
@@ -420,7 +510,6 @@ export class EffectsManager {
             single.x = Math.max(minX, Math.min(maxX, Math.round(single.anchorCenterX - single.w / 2)));
         }
 
-        // Order by speaking order (older bubble stays steadily on top, newer reply stacks cleanly below if overlapping!)
         items.sort((a, b) => a.entry.createdAt - b.entry.createdAt);
 
         const placed = [];

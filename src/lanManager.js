@@ -173,6 +173,10 @@ export class LanManager {
             presetId: pet.presetId || 'cat',
             skinMode: pet.skinMode || 'preset',
             skinHash: skinDesc.skinHash,
+            stance: pet.stance || 'balanced',
+            trait: pet.trait || null,
+            relicIds: Array.isArray(pet.relicIds) ? [...pet.relicIds] : [],
+            equippedSkills: Array.isArray(pet.equippedSkills) ? [...pet.equippedSkills] : [],
         };
     }
 
@@ -190,14 +194,34 @@ export class LanManager {
         });
     }
 
-    sendBattleRequest(peerId) {
+    sendGiftTreat(peerId) {
+        const peer = this.peers.get(peerId);
+        if (!peer)
+            return;
+        const primary = this._roster.getPrimaryPet();
+        this._sendTcpMessage(peer.ip, peer.tcpPort, {
+            type: 'GIFT_TREAT',
+            fromPeerId: this.peerId,
+            fromOwner: this._roster.getOwnerName(),
+            fromPetName: primary.name,
+            coinsGift: 10,
+        });
+    }
+
+    sendBattleRequest(peerId, mode = '1v1') {
         const peer = this.peers.get(peerId);
         if (!peer)
             return false;
         const primary = this._roster.getPrimaryPet();
+        const secondary = this._roster.getSecondaryPet();
+        const bossSeed = Math.floor(Math.random() * 899999) + 100000;
         this._sendTcpMessage(peer.ip, peer.tcpPort, {
             type: 'BATTLE_REQUEST',
+            mode, // '1v1' | '2v2' | 'boss_raid'
+            bossSeed,
             challenger: this.buildFighterPacket(primary),
+            challengerSub: (mode === '2v2' && secondary) ? this.buildFighterPacket(secondary) : null,
+            challengerAssist: (mode === '1v1' && secondary) ? this.buildFighterPacket(secondary) : null,
             challengerTcpPort: this._tcpPort,
         });
         return true;
@@ -205,23 +229,44 @@ export class LanManager {
 
     acceptBattleChallenge(challengeInfo) {
         const defenderPet = this._roster.getPrimaryPet();
+        const defenderSubPet = this._roster.getSecondaryPet();
         const defender = this.buildFighterPacket(defenderPet);
-        const seed = Math.floor(Math.random() * 899999) + 100000;
+        const defenderSub = defenderSubPet ? this.buildFighterPacket(defenderSubPet) : null;
+        const mode = challengeInfo.mode || '1v1';
+        const seed = mode === 'boss_raid'
+            ? (Number(challengeInfo.bossSeed) || (Math.floor(Math.random() * 899999) + 100000))
+            : (Math.floor(Math.random() * 899999) + 100000);
 
         this._sendTcpMessage(challengeInfo.fromIp, challengeInfo.challengerTcpPort, {
             type: 'BATTLE_ACCEPT',
+            mode,
             seed,
             challenger: challengeInfo.challenger,
+            challengerSub: challengeInfo.challengerSub || null,
+            challengerAssist: challengeInfo.challengerAssist || null,
             defender,
+            defenderSub: mode === '2v2' ? defenderSub : null,
+            defenderAssist: mode === '1v1' ? defenderSub : null,
         });
 
-        // Start identical deterministic battle locally at the exact same moment!
+        // Canonical team ordering so Mulberry32 PRNG plays out 100% identically on BOTH peers!
+        const leftTeam = mode === 'boss_raid'
+            ? [challengeInfo.challenger, defender]
+            : [challengeInfo.challenger, ...(mode === '2v2' && challengeInfo.challengerSub ? [challengeInfo.challengerSub] : [])];
+        const rightTeam = mode === 'boss_raid'
+            ? []
+            : [defender, ...(mode === '2v2' && defenderSub ? [defenderSub] : [])];
+        const localPetIds = mode === '2v2' && defenderSubPet ? [defenderPet.id, defenderSubPet.id] : [defenderPet.id];
+
         if (this._callbacks.onBattleStart) {
             this._callbacks.onBattleStart({
                 seed,
-                leftFighter: defender,
-                rightFighter: challengeInfo.challenger,
-                localPetId: defenderPet.id,
+                mode,
+                leftTeam,
+                rightTeam,
+                assistLeft: mode === '1v1' ? (challengeInfo.challengerAssist || null) : null,
+                assistRight: mode === '1v1' ? defenderSub : null,
+                localPetIds,
                 isLanBattle: true,
             });
         }
@@ -282,6 +327,7 @@ export class LanManager {
             peerId: this.peerId,
             tcpPort: this._tcpPort,
             ownerName: this._roster.getOwnerName(),
+            titleBadge: this._roster.getEquippedTitleBadge?.() || '',
             petName: primary.name,
             level: primary.level,
             archetype: primary.archetype,
@@ -351,6 +397,7 @@ export class LanManager {
                     ip: senderIp,
                     tcpPort: Number(msg.tcpPort) || 0,
                     ownerName: String(msg.ownerName || 'LAN伙伴').slice(0, 20),
+                    titleBadge: String(msg.titleBadge || '').slice(0, 16),
                     petName: String(msg.petName || '萌宠').slice(0, 20),
                     level: Math.max(1, Number(msg.level) || 1),
                     archetype: String(msg.archetype || 'martial'),
@@ -518,30 +565,46 @@ export class LanManager {
         connection.close(null);
 
         if (msg.type === 'GREET') {
-            if (this._callbacks.onPeerGreet)
-                this._callbacks.onPeerGreet(msg);
+            this._callbacks.onPeerGreet?.(msg);
+        } else if (msg.type === 'GIFT_TREAT') {
+            this._callbacks.onPeerGiftReceived?.(msg);
         } else if (msg.type === 'BATTLE_REQUEST' && msg.challenger) {
-            if (this._callbacks.onBattleChallengeReceived) {
-                this._callbacks.onBattleChallengeReceived({
-                    fromIp: remoteIp,
-                    challengerTcpPort: Number(msg.challengerTcpPort) || 0,
-                    challenger: msg.challenger,
-                });
-            }
+            this._callbacks.onBattleChallengeReceived?.({
+                fromIp: remoteIp,
+                challengerTcpPort: Number(msg.challengerTcpPort) || 0,
+                mode: msg.mode || '1v1',
+                bossSeed: Number(msg.bossSeed) || 0,
+                challenger: msg.challenger,
+                challengerSub: msg.challengerSub || null,
+                challengerAssist: msg.challengerAssist || null,
+            });
         } else if (msg.type === 'BATTLE_ACCEPT' && msg.seed && msg.defender) {
             const localPrimary = this._roster.getPrimaryPet();
-            if (this._callbacks.onBattleStart) {
-                this._callbacks.onBattleStart({
-                    seed: Number(msg.seed),
-                    leftFighter: msg.challenger || this.buildFighterPacket(localPrimary),
-                    rightFighter: msg.defender,
-                    localPetId: localPrimary?.id,
-                    isLanBattle: true,
-                });
-            }
+            const localSub = this._roster.getSecondaryPet();
+            const mode = msg.mode || '1v1';
+            const myMain = msg.challenger || this.buildFighterPacket(localPrimary);
+            const leftTeam = mode === 'boss_raid'
+                ? [myMain, msg.defender]
+                : [myMain, ...(mode === '2v2' && msg.challengerSub ? [msg.challengerSub] : [])];
+            const rightTeam = mode === 'boss_raid'
+                ? []
+                : [msg.defender, ...(mode === '2v2' && msg.defenderSub ? [msg.defenderSub] : [])];
+            const localPetIds = (mode === '2v2' && localSub)
+                ? [localPrimary?.id, localSub.id].filter(Boolean)
+                : [localPrimary?.id].filter(Boolean);
+
+            this._callbacks.onBattleStart?.({
+                seed: Number(msg.seed),
+                mode,
+                leftTeam,
+                rightTeam,
+                assistLeft: mode === '1v1' ? (msg.challengerAssist || null) : null,
+                assistRight: mode === '1v1' ? (msg.defenderAssist || null) : null,
+                localPetIds,
+                isLanBattle: true,
+            });
         } else if (msg.type === 'BATTLE_DECLINE') {
-            if (this._callbacks.onBattleDeclined)
-                this._callbacks.onBattleDeclined(msg);
+            this._callbacks.onBattleDeclined?.(msg);
         }
     }
 }

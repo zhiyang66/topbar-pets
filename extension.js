@@ -56,6 +56,7 @@ export default class TopBarPetExtension extends Extension {
         this._roster = new RosterManager(this._settings, {
             onRosterStructureChanged: () => {
                 this._stageManager?.syncLocalRoster();
+                this._stageManager?.syncSafeGapEggBadge();
                 this._indicator?.refreshStats();
             },
             onPetAdopted: newPet => {
@@ -66,6 +67,18 @@ export default class TopBarPetExtension extends Extension {
             onLevelUp: (pet, unlockedSkills) => {
                 const actor = this._stageManager?.localActors.get(pet.id);
                 actor?.celebrateLevelUp(unlockedSkills);
+                this._indicator?.refreshStats();
+            },
+            onAchievementUnlocked: ach => {
+                this._effects?.showAchievementToast(ach);
+                this._indicator?.refreshStats();
+            },
+            onEggUpdated: () => {
+                this._stageManager?.syncSafeGapEggBadge();
+                this._indicator?.refreshStats();
+            },
+            onEggHatched: (baby, trait) => {
+                this._stageManager?.playEggHatchCelebration(baby, trait);
                 this._indicator?.refreshStats();
             },
             onStatsUpdated: () => {
@@ -100,6 +113,13 @@ export default class TopBarPetExtension extends Extension {
                     const primary = this._stageManager?.getPrimaryActor();
                     primary?.say(`👋 收到「${msg.fromOwner}」的 ${msg.fromPetName} 发来的热情问候！❤️`, 2800);
                 },
+                onPeerGiftReceived: msg => {
+                    const gift = Math.min(25, Math.max(5, Number(msg.coinsGift) || 10));
+                    this._roster?.addCoins(gift, false);
+                    this._roster?.recordFed(this._roster.primaryPetId, 20);
+                    const primary = this._stageManager?.getPrimaryActor();
+                    primary?.say(`🎁 收到「${msg.fromOwner}」送来的伴手礼与 +${gift}🪙 幸运币！❤️`, 3000);
+                },
                 onBattleChallengeReceived: info => {
                     this._battleArena?.showChallengePrompt(info);
                 },
@@ -132,11 +152,14 @@ export default class TopBarPetExtension extends Extension {
             sysMonitor: this._sysMonitor,
             lanManager: this._lanManager,
             callbacks: {
-                onStartPracticeBattle: opponent => this._battleArena.startPracticeBattle(opponent),
-                onChallengeLanPeer: peer => {
-                    this._lanManager.sendBattleRequest(peer.peerId);
-                    this._stageManager.getPrimaryActor()?.say(`已向「${peer.ownerName}」的 ${peer.petName} 发送对战申请！⚔️`, 2500);
+                onStartPracticeBattle: (opponent, mode) => this._battleArena.startPracticeBattle(opponent, mode),
+                onStartBossRaid: () => this._battleArena.startSoloBossRaid(),
+                onChallengeLanPeer: (peer, mode = '1v1') => {
+                    this._lanManager.sendBattleRequest(peer.peerId, mode);
+                    const tag = mode === 'boss_raid' ? '组队讨伐深渊Boss邀请' : (mode === '2v2' ? '2v2元素双打战书' : '1v1决斗战书');
+                    this._stageManager.getPrimaryActor()?.say(`已向「${peer.ownerName}」发送${tag}！⚔️`, 2500);
                 },
+                onDirectorStateChanged: () => this._indicator?.refreshStats(),
                 onOpenPrefs: () => this._openPetPreferences(),
             },
         });
@@ -205,6 +228,8 @@ export default class TopBarPetExtension extends Extension {
             if (hostDisplay)
                 launcher.setenv('DISPLAY', hostDisplay, true);
             launcher.setenv('GDK_BACKEND', 'wayland,x11', true);
+            if (GLib.getenv('TOPBAR_PET_PREVIEW') === '1' && !hostWayland)
+                launcher.setenv('GSK_RENDERER', 'cairo', true);
 
             this._prefsProc = launcher.spawnv(['gjs', '-m', scriptPath, this.path]);
         } catch (e) {

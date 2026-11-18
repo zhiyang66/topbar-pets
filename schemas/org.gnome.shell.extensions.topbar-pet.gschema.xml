@@ -59,6 +59,16 @@
       <summary>Allow Pets to Roam Across the Entire Screen &amp; Window Ledges Non-Destructively</summary>
     </key>
 
+    <key name="max-roaming-pets" type="i">
+      <default>4</default>
+      <summary>Maximum Active Full-Screen Roaming Pets Before Rotating Extra Pets to Camp/TopBar</summary>
+    </key>
+
+    <key name="world-boss-enabled" type="b">
+      <default>true</default>
+      <summary>Allow Periodic Top-Bar World Boss Portal Invasions</summary>
+    </key>
+
     <key name="click-through" type="b">
       <default>false</default>
       <summary>Click-Through (Ghost) Mode</summary>

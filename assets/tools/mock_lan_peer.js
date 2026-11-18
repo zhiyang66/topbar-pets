@@ -1,8 +1,7 @@
 #!/usr/bin/env -S gjs -m
 /**
- * Standalone Mock LAN Peer Bot for testing TopBar Pet 2.0 LAN Multiplayer
- * on a single computer! Uses an ephemeral UDP sender port so it never collides
- * with GNOME Shell's own port 49271 listener on the same host.
+ * Standalone Mock LAN Peer Bot 3.0 for testing TopBar Pet LAN 1v1, 2v2 Elemental Duo,
+ * 2-Player Co-op Random Boss Raid & Gift Exchange on a single computer!
  */
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -18,11 +17,29 @@ const botFighter = {
     ownerName: '局域网测试员·阿泽',
     id: 'bot-dragon-1',
     name: '赤焰小火龙',
-    level: 4,
+    level: 5,
     archetype: 'fire',
     presetId: 'dragon',
     skinMode: 'preset',
     skinHash: 'preset:dragon',
+    stance: 'berserk',
+    relicIds: ['prism_ring', 'fang_charm'],
+    equippedSkills: ['f2', 'f3', 'f5', 'f6'],
+};
+
+const botSubFighter = {
+    peerId,
+    ownerName: '局域网测试员·阿泽',
+    id: 'bot-slime-2',
+    name: '霜冠果冻王',
+    level: 5,
+    archetype: 'ice',
+    presetId: 'slime',
+    skinMode: 'preset',
+    skinHash: 'preset:slime',
+    stance: 'counter',
+    relicIds: ['chrono_watch'],
+    equippedSkills: ['i2', 'i3', 'i5', 'i6'],
 };
 
 const tcpService = new Gio.SocketService();
@@ -55,12 +72,21 @@ tcpService.connect('incoming', (_svc, conn) => {
             if (line) {
                 const msg = JSON.parse(dec.decode(line));
                 if (msg.type === 'BATTLE_REQUEST' && msg.challenger) {
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 450, () => {
+                    const mode = msg.mode || '1v1';
+                    const seed = mode === 'boss_raid'
+                        ? (Number(msg.bossSeed) || (Math.floor(Math.random() * 899999) + 100000))
+                        : (Math.floor(Math.random() * 899999) + 100000);
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 420, () => {
                         sendTcp(remoteIp, Number(msg.challengerTcpPort), {
                             type: 'BATTLE_ACCEPT',
-                            seed: Math.floor(Math.random() * 899999) + 100000,
+                            mode,
+                            seed,
                             challenger: msg.challenger,
+                            challengerSub: msg.challengerSub || null,
+                            challengerAssist: msg.challengerAssist || null,
                             defender: botFighter,
+                            defenderSub: mode === '2v2' ? botSubFighter : null,
+                            defenderAssist: mode === '1v1' ? botSubFighter : null,
                         });
                         return GLib.SOURCE_REMOVE;
                     });
@@ -74,6 +100,17 @@ tcpService.connect('incoming', (_svc, conn) => {
                             fromPetName: botFighter.name,
                         });
                     }
+                } else if (msg.type === 'GIFT_TREAT' && hostTcpPortArg > 0) {
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 650, () => {
+                        sendTcp(remoteIp, hostTcpPortArg, {
+                            type: 'GIFT_TREAT',
+                            fromPeerId: peerId,
+                            fromOwner: botFighter.ownerName,
+                            fromPetName: botFighter.name,
+                            coinsGift: 12,
+                        });
+                        return GLib.SOURCE_REMOVE;
+                    });
                 }
             }
         } catch (_e) {}
@@ -83,12 +120,14 @@ tcpService.connect('incoming', (_svc, conn) => {
 });
 tcpService.start();
 
-// Send incoming LAN Battle Invitation Popup 2.2s after spawning!
+// Send incoming 2v2 Elemental Duo Challenge 2.2s after spawning!
 if (hostTcpPortArg > 0) {
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2200, () => {
         sendTcp('127.0.0.1', hostTcpPortArg, {
             type: 'BATTLE_REQUEST',
+            mode: '2v2',
             challenger: botFighter,
+            challengerSub: botSubFighter,
             challengerTcpPort: tcpPort,
         });
         return GLib.SOURCE_REMOVE;
@@ -122,6 +161,7 @@ const broadcastOnce = () => {
         peerId,
         tcpPort,
         ownerName: botFighter.ownerName,
+        titleBadge: '💥 元素炼金师',
         petName: botFighter.name,
         level: botFighter.level,
         archetype: botFighter.archetype,

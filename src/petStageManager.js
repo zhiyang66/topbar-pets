@@ -7,6 +7,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { addChromeActor, removeChromeActor } from './compat.js';
 import { loadSpriteBankForProfile } from './spriteLoader.js';
 import { getArchetype } from './rpg.js';
+import { BOSS_POOL } from './relicsAndAchievements.js';
+import { PixelFxSurface } from './pixelfx/bridge.js';
 import { PetActor } from './petActor.js';
 
 const DUO_KINDS = [
@@ -22,19 +24,17 @@ const DUO_KINDS = [
 ];
 
 /**
- * Renders a LAN Peer's Visitor Pet on your Top Panel, smoothly interpolating
- * normalized coordinates (0..1) across any screen resolution, with social reactions
- * and Arena entrance/exit choreography!
+ * Renders a LAN Peer's Visitor Pet with Honor Title badge & 1v1 / 2v2 / Co-op Raid / Gift menu!
  */
 class RemotePetActor {
-    constructor({ extensionPath, settings, peerInfo, perception, lanManager, effects, onChallengePeer }) {
+    constructor({ extensionPath, settings, peerInfo, perception, lanManager, effects, callbacks }) {
         this._extensionPath = extensionPath;
         this._settings = settings;
         this.peer = peerInfo;
         this._perception = perception;
         this._lanManager = lanManager;
         this._effects = effects;
-        this._onChallengePeer = onChallengePeer;
+        this._callbacks = callbacks || {};
 
         this._bank = null;
         this._petW = 32;
@@ -72,10 +72,10 @@ class RemotePetActor {
         addChromeActor(this._actor, { interactive: !clickThrough, trackFullscreen: true });
 
         this._badge = new St.Label({
-            text: `🌐 ${peerInfo.ownerName}·${peerInfo.petName} Lv.${peerInfo.level}`,
+            text: this._formatBadgeText(peerInfo),
             style_class: 'topbar-pet-lan-badge',
             reactive: false,
-            opacity: 215,
+            opacity: 218,
         });
         this._badge.connect('destroy', () => {
             this._badge = null;
@@ -125,6 +125,11 @@ class RemotePetActor {
         this._syncMasterVisibility();
     }
 
+    _formatBadgeText(p) {
+        const titlePrefix = p.titleBadge ? `[${p.titleBadge}] ` : '';
+        return `🌐 ${titlePrefix}${p.ownerName}·${p.petName} Lv.${p.level}`;
+    }
+
     _syncMasterVisibility() {
         const masterVis = this._settings.get_boolean('pets-visible');
         if (this._actor && !this._inArenaBattle)
@@ -165,7 +170,7 @@ class RemotePetActor {
         return this._inArenaBattle;
     }
 
-    say(text, durationMs = 1600) {
+    say(text, durationMs = 1800) {
         if (!this._actor || !this._actor.visible)
             return;
         this._effects.showBubble(
@@ -280,13 +285,26 @@ class RemotePetActor {
             return;
         this._menu.removeAll();
         const arch = getArchetype(this.peer.archetype);
+        const titleStr = this.peer.titleBadge ? ` [${this.peer.titleBadge}]` : '';
         this._menu.addMenuItem(new PopupMenu.PopupMenuItem(
-            `🌐 ${this.peer.ownerName} 的「${this.peer.petName}」 Lv.${this.peer.level} [${arch.badge}]`,
+            `🌐 ${this.peer.ownerName}${titleStr} ·「${this.peer.petName}」Lv.${this.peer.level} [${arch.badge}]`,
             { reactive: false }
         ));
         this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._menu.addAction('⚔️ 申请局域网对战！', () => {
-            this._onChallengePeer?.(this.peer);
+        this._menu.addAction('⚔️ 申请 1v1 宠物决斗', () => {
+            this._callbacks.onChallengeLanPeer?.(this.peer, '1v1');
+        });
+        this._menu.addAction('⚡ 申请 2v2 元素双打决斗', () => {
+            this._callbacks.onChallengeLanPeer?.(this.peer, '2v2');
+        });
+        this._menu.addAction('🐉 邀请组队讨伐随机深渊 Boss！', () => {
+            this._callbacks.onChallengeLanPeer?.(this.peer, 'boss_raid');
+        });
+        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._menu.addAction('🎁 请客投喂伴手礼 (+好感)', () => {
+            this._lanManager.sendGiftTreat?.(this.peer.peerId);
+            this._effects.spawnBurst(this._curX + this._petW / 2, this._curY, ['🐟', '🎁', '❤️'], 3);
+            this.say(`收到投喂好开心呀，谢谢款待 🐟❤️`, 2200);
         });
         this._menu.addAction('👋 挥爪打招呼', () => {
             this._lanManager.sendGreeting(this.peer.peerId);
@@ -306,7 +324,6 @@ class RemotePetActor {
         const maxX = bounds.maxX;
         this._targetX = minX + (Number(peerInfo.normX) || 0.5) * (maxX - minX);
 
-        // Respect local user's free-roam switch: only roam into screen space when local user also enabled it!
         const localFreeRoam = this._settings.get_boolean('free-roam-enabled');
         const peerNormY = (localFreeRoam && peerInfo.freeRoam) ? Math.max(0, Math.min(1, Number(peerInfo.normY) || 0)) : 0;
         this._targetY = bounds.groundY + peerNormY * Math.max(0, bounds.bottomGroundY - bounds.groundY);
@@ -317,7 +334,7 @@ class RemotePetActor {
         }
 
         if (this._badge)
-            this._badge.text = `🌐 ${peerInfo.ownerName}·${peerInfo.petName} Lv.${peerInfo.level}`;
+            this._badge.text = this._formatBadgeText(peerInfo);
     }
 
     tick(dtMs) {
@@ -338,7 +355,6 @@ class RemotePetActor {
             }
         }
 
-        // Pre-battle 2D sprint to Top-Center + downward dive into Arena!
         if (this._arenaEntering) {
             if (this._arenaDiveStarted)
                 return;
@@ -388,7 +404,6 @@ class RemotePetActor {
             return;
         }
 
-        // Normal 2D LAN interpolation & local social reaction flair
         let stateOverride = null;
         if (this._socialTimerMs > 0) {
             this._socialTimerMs -= dtMs;
@@ -459,8 +474,8 @@ class RemotePetActor {
 }
 
 /**
- * Coordinates up to 3 local adopted pets + unlimited LAN visitor pets on the Top Panel,
- * including 9 sibling/visitor social choreographies and Arena entrance/exit transitions!
+ * Coordinates local adopted pets + LAN visitor pets + RoamDirector Crowd Governance
+ * + Cozy Campfire + High-CPU Eco Mode + Pomodoro Focus Expedition + Top-Bar World Boss!
  */
 export class PetStageManager {
     constructor({
@@ -482,19 +497,57 @@ export class PetStageManager {
         this._lanManager = lanManager;
         this._callbacks = callbacks;
 
-        this.localActors = new Map();  // petId -> PetActor
-        this.remoteActors = new Map(); // peerId -> RemotePetActor
+        this.localActors = new Map();
+        this.remoteActors = new Map();
         this._releasingIds = new Set();
         this._arenaFallbackTimerId = 0;
 
-        this._visSignalId = this._settings.connect('changed::pets-visible', () => {
-            if (!this._settings.get_boolean('pets-visible'))
-                this._effects?.clearAllBubbles?.();
-            this.syncLocalRoster();
-        });
+        // RoamDirector & Cozy Campfire state
+        this._rotationIdx = 0;
+        this._campfireWidget = null;
+        this._campfireSurf = null;
+
+        // High-CPU Eco Quiet Mode & Work Context state
+        this._highCpuStreak = 0;
+        this._ecoActive = false;
+        this._workContextAccSec = 0;
+
+        // Pomodoro Focus Expedition state
+        this._focusRemainSec = 0;
+        this._focusTimerId = 0;
+
+        // Top-Bar World Boss Invasion state
+        this._worldBoss = null; // { actor, hud, bank, hp, maxHp, x, y, frameIdx, accMs, name }
+        this._worldBossSpawnAccSec = 0;
+
+        // Safe-Gap Fallback Egg Label (used ONLY when show-panel-icon is false!)
+        this._safeGapEggBadge = null;
+
+        this._settingsSignals = [
+            this._settings.connect('changed::pets-visible', () => {
+                if (!this._settings.get_boolean('pets-visible')) {
+                    this._effects?.clearAllBubbles?.();
+                    this._destroyWorldBoss();
+                }
+                this.syncLocalRoster();
+                this._syncCampfireVisibility();
+                this.syncSafeGapEggBadge();
+            }),
+            this._settings.connect('changed::free-roam-enabled', () => {
+                this._rebalanceRoamDirector();
+            }),
+            this._settings.connect('changed::max-roaming-pets', () => {
+                this._rebalanceRoamDirector();
+            }),
+            this._settings.connect('changed::show-panel-icon', () => {
+                this.syncSafeGapEggBadge();
+            }),
+        ];
 
         this.syncLocalRoster();
+        this.syncSafeGapEggBadge();
 
+        // Main 40ms Social, Campfire VFX & World Boss Loop
         this._socialTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
             if (!Main.layoutManager?.panelBox?.get_stage?.()) {
                 this._socialTimerId = 0;
@@ -502,18 +555,33 @@ export class PetStageManager {
             }
             if (!this._settings.get_boolean('pets-visible'))
                 return GLib.SOURCE_CONTINUE;
+
             for (const remote of this.remoteActors.values())
                 remote.tick(40);
-            this._checkPetToPetEncounters();
+            if (!this._ecoActive)
+                this._checkPetToPetEncounters();
+            if (this._campfireSurf && this._campfireWidget?.visible && !this._ecoActive) {
+                if (!this._campfireSurf.hasActiveEffects())
+                    this._campfireSurf.spawn('fire/campfire', { x: 40, y: 66, maxDuration: 8.0 });
+                this._campfireSurf.step(0.04);
+            }
+            if (this._worldBoss)
+                this._tickWorldBoss(40);
+            return GLib.SOURCE_CONTINUE;
+        });
+
+        // 2-Second Eco Mode, RoamDirector Rotation, Work Context & World Boss Auto-Spawn Watcher
+        this._directorTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_LOW, 2, () => {
+            this._stepEcoAndCompanionDirector(2);
             return GLib.SOURCE_CONTINUE;
         });
     }
 
     destroy() {
-        if (this._visSignalId && this._settings) {
-            this._settings.disconnect(this._visSignalId);
-            this._visSignalId = 0;
-        }
+        for (const id of this._settingsSignals)
+            this._settings.disconnect(id);
+        this._settingsSignals = [];
+
         if (this._arenaFallbackTimerId) {
             GLib.Source.remove(this._arenaFallbackTimerId);
             this._arenaFallbackTimerId = 0;
@@ -522,6 +590,15 @@ export class PetStageManager {
             GLib.Source.remove(this._socialTimerId);
             this._socialTimerId = 0;
         }
+        if (this._directorTimerId) {
+            GLib.Source.remove(this._directorTimerId);
+            this._directorTimerId = 0;
+        }
+        this.stopFocusExpedition(false);
+        this._destroyWorldBoss();
+        this._destroyCampfire();
+        this._destroySafeGapEggBadge();
+
         for (const actor of this.localActors.values())
             actor.destroy();
         this.localActors.clear();
@@ -531,6 +608,425 @@ export class PetStageManager {
         this.remoteActors.clear();
     }
 
+    // =========================================================================
+    // RoamDirector: Multi-Pet Anti-Chaos Quota, Rotation & Cozy Campfire
+    // =========================================================================
+    canTakeAirSlot(requestingPetId) {
+        if (this._ecoActive || this._focusRemainSec > 0)
+            return false;
+        let airCount = 0;
+        for (const [id, act] of this.localActors.entries()) {
+            if (id !== requestingPetId && act.isAirborneRoamState())
+                airCount += 1;
+        }
+        return airCount < 2; // Hard cap: never more than 2 pets airborne simultaneously!
+    }
+
+    canPerchOnLedge(metaWin, requestingPetId) {
+        if (!metaWin)
+            return false;
+        let count = 0;
+        for (const [id, act] of this.localActors.entries()) {
+            if (id !== requestingPetId && act.getActiveLedgeWindow() === metaWin)
+                count += 1;
+        }
+        return count < 2; // Hard cap: max 2 pets perched on the same window titlebar!
+    }
+
+    _rebalanceRoamDirector() {
+        const freeRoam = this._settings.get_boolean('free-roam-enabled');
+        const maxActive = Math.max(1, this._settings.get_int('max-roaming-pets') || 4);
+        const allActors = Array.from(this.localActors.values());
+
+        if (!freeRoam || allActors.length <= maxActive) {
+            for (const act of allActors)
+                act.setRoamAssignment('active_roamer', null);
+            this._syncCampfireVisibility(false);
+            return;
+        }
+
+        const bounds = this._perception?.getScreenRoamBounds?.(38, 38, 4);
+        const campCenterX = bounds ? Math.max(bounds.minX + 80, bounds.maxX - 96) : 1100;
+
+        // Primary pet always stays active; remaining slots rotate smoothly every 3 minutes!
+        const primaryId = this._roster.primaryPetId;
+        const others = allActors.filter(a => a.pet.id !== primaryId);
+        const activeIds = new Set([primaryId]);
+
+        for (let i = 0; i < others.length && activeIds.size < maxActive; i++) {
+            const pickActor = others[(this._rotationIdx + i) % others.length];
+            activeIds.add(pickActor.pet.id);
+        }
+
+        let campCount = 0;
+        others.forEach((act, idx) => {
+            if (activeIds.has(act.pet.id)) {
+                act.setRoamAssignment('active_roamer', null);
+            } else if (idx % 2 === 0) {
+                const offset = (campCount % 3 - 1) * 28;
+                campCount += 1;
+                act.setRoamAssignment('camp_resting', campCenterX + offset);
+            } else {
+                act.setRoamAssignment('topbar_patrol', null);
+            }
+        });
+
+        this._syncCampfireVisibility(campCount > 0, bounds, campCenterX);
+    }
+
+    _syncCampfireVisibility(shouldShow = false, bounds = null, campCenterX = 1100) {
+        const masterVis = this._settings.get_boolean('pets-visible');
+        const freeRoam = this._settings.get_boolean('free-roam-enabled');
+        if (!shouldShow || !masterVis || !freeRoam || this._ecoActive) {
+            this._destroyCampfire();
+            return;
+        }
+        const b = bounds || this._perception?.getScreenRoamBounds?.(38, 38, 4);
+        if (!b)
+            return;
+
+        if (!this._campfireWidget) {
+            this._campfireSurf = new PixelFxSurface(80, 76, 1);
+            this._campfireSurf.spawn('fire/campfire', { x: 40, y: 66, maxDuration: 8.0 });
+            const w = new St.Widget({
+                width: 80,
+                height: 76,
+                reactive: false,
+            });
+            w.set_content(this._campfireSurf.content);
+            addChromeActor(w, { interactive: false, trackFullscreen: true });
+            this._campfireWidget = w;
+        }
+        this._campfireWidget.set_position(Math.round(campCenterX - 20), Math.round(b.bottomGroundY + 38 - 66));
+        this._campfireWidget.visible = true;
+    }
+
+    _destroyCampfire() {
+        if (this._campfireWidget) {
+            removeChromeActor(this._campfireWidget);
+            this._campfireWidget.destroy();
+            this._campfireWidget = null;
+        }
+        this._campfireSurf = null;
+    }
+
+    recallAllPetsToTopBar() {
+        const bounds = this._perception?.getScreenRoamBounds?.(38, 38, 4);
+        const list = Array.from(this.localActors.values());
+        list.forEach((act, idx) => {
+            const targetX = bounds
+                ? Math.round(bounds.minX + 120 + idx * 54)
+                : null;
+            act.recallToTopBar(targetX);
+        });
+        this.getPrimaryActor()?.say('🎺 集合哨吹响！全员瞬间归队顶部栏列队完毕 ✨', 2400);
+    }
+
+    // =========================================================================
+    // 🌱 High-CPU Eco Quiet Mode, 💻 Work Context & 🍅 Pomodoro Expedition
+    // =========================================================================
+    _stepEcoAndCompanionDirector(dtSec) {
+        const cpu = this._sysMonitor?.cpuPercent ?? 0;
+        if (cpu >= 70) {
+            this._highCpuStreak += dtSec;
+            if (!this._ecoActive && this._highCpuStreak >= 4) {
+                this._ecoActive = true;
+                this._effects.setEcoMode(true);
+                for (const act of this.localActors.values())
+                    act.setEcoMode(true);
+                this._syncCampfireVisibility(false);
+                this._callbacks.onDirectorStateChanged?.();
+            }
+        } else if (cpu < 42) {
+            this._highCpuStreak = 0;
+            if (this._ecoActive) {
+                this._ecoActive = false;
+                this._effects.setEcoMode(false);
+                for (const act of this.localActors.values())
+                    act.setEcoMode(false);
+                this._roster.addCoins(15, false);
+                this._rebalanceRoamDirector();
+                this.getPrimaryActor()?.say('🤫 刚看你高负载忙正事，全队乖乖降频省电没吵你哟！奖励 +15🪙 ✨', 3000);
+                this._callbacks.onDirectorStateChanged?.();
+            }
+        }
+
+        if (this._ecoActive || !this._settings.get_boolean('pets-visible'))
+            return;
+
+        this._workContextAccSec += dtSec;
+        if (this._workContextAccSec >= 60) {
+            this._workContextAccSec = 0;
+            this._rotationIdx += 1;
+            if (this._rotationIdx % 3 === 0)
+                this._rebalanceRoamDirector();
+
+            const ctx = this._perception?.classifyFocusedAppContext?.();
+            if (ctx?.category === 'coding') {
+                this._roster.addCoins(6, false);
+                this._roster.grantAllActivePetsXp(6);
+                if (this._focusRemainSec <= 0 && Math.random() < 0.35)
+                    this.getPrimaryActor()?.say(`💻 陪你在「${ctx.appName || '代码编辑器'}」敲代码攒下灵感，金币 +6 🪙`, 2400);
+            } else if (ctx?.category === 'creative_docs') {
+                for (const p of this._roster.pets)
+                    p.mood = Math.min(100, p.mood + 3);
+            }
+            this.syncSafeGapEggBadge();
+        }
+
+        // Periodic Top-Bar World Boss Portal Invasion (every ~22 min if enabled & idle!)
+        if (this._settings.get_boolean('world-boss-enabled') && !this._worldBoss && this._focusRemainSec <= 0) {
+            this._worldBossSpawnAccSec += dtSec;
+            if (this._worldBossSpawnAccSec >= 1320) {
+                this._worldBossSpawnAccSec = 0;
+                this.summonWorldBoss();
+            }
+        }
+    }
+
+    isEcoModeActive() {
+        return this._ecoActive;
+    }
+
+    isFocusActive() {
+        return this._focusRemainSec > 0;
+    }
+
+    getFocusRemainingSec() {
+        return this._focusRemainSec;
+    }
+
+    toggleFocusExpedition(minutes = 25) {
+        if (this._focusRemainSec > 0) {
+            this.stopFocusExpedition(true);
+            return false;
+        }
+        this._focusRemainSec = Math.max(60, Math.round(minutes * 60));
+        this._effects.setMaxConcurrentBubbles(1);
+        this.getPrimaryActor()?.say(`🍅 开启 ${minutes} 分钟专注地下城远征！我们安静扎营探险，不打扰你工作哟 ✨`, 3000);
+        this._callbacks.onDirectorStateChanged?.();
+
+        this._focusTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_LOW, 1, () => {
+            this._focusRemainSec = Math.max(0, this._focusRemainSec - 1);
+            this._callbacks.onDirectorStateChanged?.();
+            if (this._focusRemainSec <= 0) {
+                this._focusTimerId = 0;
+                this._effects.setMaxConcurrentBubbles(2);
+                const reward = this._roster.recordFocusSessionCompleted();
+                const relicTxt = reward.bonusRelic ? ` · 获得圣物【${reward.bonusRelic.name}】!` : '';
+                this._effects.showQuestCompleteToast(
+                    '🍅 专注地下城远征凯旋完成！',
+                    `获得 +${reward.coins} 金币 & 全队大量经验${relicTxt} · 快起身喝口水休息一下吧 ✨`
+                );
+                this._callbacks.onDirectorStateChanged?.();
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+        return true;
+    }
+
+    stopFocusExpedition(notify = false) {
+        if (this._focusTimerId) {
+            GLib.Source.remove(this._focusTimerId);
+            this._focusTimerId = 0;
+        }
+        this._focusRemainSec = 0;
+        this._effects.setMaxConcurrentBubbles(2);
+        if (notify)
+            this.getPrimaryActor()?.say('已提前结束专注远征，随时准备再次出发 🐾', 2200);
+        this._callbacks.onDirectorStateChanged?.();
+    }
+
+    // =========================================================================
+    // 👾 Top-Bar World Boss Portal Invasion (Swarm Raid right on the Top Bar!)
+    // =========================================================================
+    isWorldBossActive() {
+        return Boolean(this._worldBoss);
+    }
+
+    summonWorldBoss() {
+        if (this._worldBoss || !this._settings.get_boolean('pets-visible'))
+            return false;
+        const bounds = this._perception?.getScreenRoamBounds?.(52, 52, 4);
+        if (!bounds)
+            return false;
+
+        const tpl = BOSS_POOL[Math.floor(Math.random() * BOSS_POOL.length)];
+        const bank = loadSpriteBankForProfile(this._extensionPath, { presetId: tpl.presetId, skinMode: 'preset' }, {
+            targetHeight: 50,
+            pixelCrisp: this._settings.get_boolean('pixel-art-scaling'),
+        });
+
+        const safeGap = this._perception?.findSafeTopBarEmptyGap?.(70);
+        const bossX = safeGap
+            ? Math.max(bounds.minX + 80, Math.min(bounds.maxX - 80, safeGap.centerX - Math.round(bank.width / 2)))
+            : Math.round(bounds.minX + (bounds.maxX - bounds.minX) * 0.68);
+        const bossY = Math.max(0, bounds.panelY + bounds.panelH - bank.height + 4);
+
+        const actor = new St.Widget({
+            width: bank.width,
+            height: bank.height,
+            reactive: true,
+            track_hover: true,
+        });
+        actor.set_position(bossX, bossY);
+
+        const petCount = Math.max(1, this.localActors.size);
+        const maxHp = 220 + petCount * 95;
+        const hud = new St.Label({
+            text: `${tpl.name} · 100%`,
+            style_class: 'topbar-pet-worldboss-hud',
+            reactive: false,
+        });
+        hud.set_position(Math.max(8, bossX - 24), bounds.panelY + bounds.panelH + 4);
+
+        addChromeActor(actor, { interactive: true, trackFullscreen: true });
+        addChromeActor(hud, { interactive: false, trackFullscreen: true });
+
+        this._worldBoss = {
+            tpl,
+            bank,
+            actor,
+            hud,
+            x: bossX,
+            y: bossY,
+            hp: maxHp,
+            maxHp,
+            frameIdx: 0,
+            accMs: 0,
+        };
+
+        // User can also click the World Boss to help their pets smite it!
+        actor.connect('button-press-event', () => {
+            this._damageWorldBoss(28, true);
+            return Clutter.EVENT_STOP;
+        });
+
+        this._effects.spawnPixelFxBurst(bossX + bank.width / 2, bossY + bank.height, 'spawn/spawn-portal', 1);
+        for (const petAct of this.localActors.values())
+            petAct.setWorldBossTarget(bossX + Math.round(bank.width / 2));
+
+        this.getPrimaryActor()?.say(`📯 警报！世界 Boss【${tpl.name}】入侵顶部栏！全员集结围殴！！⚔️`, 2800);
+        this._callbacks.onDirectorStateChanged?.();
+        return true;
+    }
+
+    _damageWorldBoss(amount, fromClick = false) {
+        if (!this._worldBoss)
+            return;
+        const wb = this._worldBoss;
+        wb.hp = Math.max(0, wb.hp - amount);
+        const pct = Math.ceil((wb.hp / wb.maxHp) * 100);
+        wb.hud.text = `${wb.tpl.name} · ${pct}%`;
+        if (fromClick)
+            this._effects.spawnPixelFxBurst(wb.x + wb.bank.width / 2, wb.y + wb.bank.height - 10, 'holy/smite', 1);
+
+        if (wb.hp <= 0) {
+            const bx = wb.x + wb.bank.width / 2;
+            const by = wb.y + wb.bank.height;
+            this._destroyWorldBoss();
+            this._effects.spawnPixelFxBurst(bx, by, 'explosions/big-explosion', 1);
+            this._effects.spawnPixelFxBurst(bx, by, 'spawn/coin-drop', 1, { coins: 9 });
+            this._roster.stats.bossKills = (this._roster.stats.bossKills || 0) + 1;
+            this._roster.addCoins(38, true);
+            this._roster.grantAllActivePetsXp(28);
+            this.getPrimaryActor()?.say(`🎉 成功击退世界 Boss【${wb.tpl.name}】！爆出满地金币 +38🪙 ✨`, 3200);
+            this._callbacks.onDirectorStateChanged?.();
+        }
+    }
+
+    _tickWorldBoss(dtMs) {
+        const wb = this._worldBoss;
+        if (!wb || !wb.actor)
+            return;
+        wb.accMs += dtMs;
+        const frames = wb.bank.states.attack || wb.bank.states.idle;
+        if (frames?.length && wb.accMs >= 110) {
+            wb.accMs = 0;
+            wb.frameIdx = (wb.frameIdx + 1) % frames.length;
+            wb.actor.set_content(frames[wb.frameIdx].left);
+        }
+    }
+
+    _destroyWorldBoss() {
+        for (const petAct of this.localActors.values())
+            petAct.setWorldBossTarget(null);
+        if (!this._worldBoss)
+            return;
+        if (this._worldBoss.hud) {
+            removeChromeActor(this._worldBoss.hud);
+            this._worldBoss.hud.destroy();
+        }
+        if (this._worldBoss.actor) {
+            removeChromeActor(this._worldBoss.actor);
+            this._worldBoss.actor.destroy();
+        }
+        this._worldBoss = null;
+    }
+
+    // =========================================================================
+    // 🥚 Zero-Occlusion Mystery Egg Safe-Gap Fallback & Hatch Celebration
+    // =========================================================================
+    syncSafeGapEggBadge() {
+        const egg = this._roster.activeEgg;
+        const panelIconShown = this._settings.get_boolean('show-panel-icon');
+        const petsVis = this._settings.get_boolean('pets-visible');
+
+        // When panel icon is shown, the egg is embedded INSIDE our own PanelMenu button (100% zero overlap!).
+        // Only place a non-reactive click-through safe-gap badge when panel icon is hidden!
+        if (!egg || panelIconShown || !petsVis) {
+            this._destroySafeGapEggBadge();
+            return;
+        }
+
+        const gap = this._perception?.findSafeTopBarEmptyGap?.(48);
+        if (!gap) {
+            this._destroySafeGapEggBadge();
+            return;
+        }
+
+        if (!this._safeGapEggBadge) {
+            const lbl = new St.Label({
+                text: `🥚${egg.progress}%`,
+                style_class: 'topbar-pet-lan-badge',
+                reactive: false, // 100% click-through!
+            });
+            addChromeActor(lbl, { interactive: false, trackFullscreen: true });
+            this._safeGapEggBadge = lbl;
+        } else {
+            this._safeGapEggBadge.text = `🥚${egg.progress}%`;
+        }
+        this._safeGapEggBadge.set_position(Math.round(gap.centerX - 22), Math.round(gap.panelY + 6));
+    }
+
+    _destroySafeGapEggBadge() {
+        if (this._safeGapEggBadge) {
+            removeChromeActor(this._safeGapEggBadge);
+            this._safeGapEggBadge.destroy();
+            this._safeGapEggBadge = null;
+        }
+    }
+
+    playEggHatchCelebration(babyPet, traitMeta) {
+        this.syncSafeGapEggBadge();
+        const primary = this.getPrimaryActor();
+        if (primary) {
+            const rect = primary.getAnchorRect();
+            this._effects.spawnPixelFxBurst(rect.x + rect.width / 2 + 28, rect.y + rect.height, 'spawn/egg-hatch', 1);
+        }
+        const traitStr = traitMeta ? ` · 天生词条【${traitMeta.label}】` : '';
+        this._effects.showBannerToast(
+            `🥚 神秘宠物蛋破壳诞生！「${babyPet.name}」加入小队！`,
+            `初始 Lv.${babyPet.level}${traitStr} ✨`,
+            null,
+            4800
+        );
+    }
+
+    // =========================================================================
+    // Standard Stage Coordination, Arena Entrance/Return & Social Encounters
+    // =========================================================================
     getPrimaryActor() {
         const primary = this._roster.getPrimaryPet();
         return primary ? (this.localActors.get(primary.id) || Array.from(this.localActors.values())[0]) : null;
@@ -541,13 +1037,13 @@ export class PetStageManager {
         return actor ? actor.getMotionSnapshot() : { normX: 0.5, state: 'walk', facing: 'right' };
     }
 
-    /**
-     * Have participating Top-Bar pets shout "我来也！", run to Top-Center, leap down
-     * into the Arena, and hide from the Top Bar until the fight ends!
-     */
-    playArenaEntrance(leftFighter, rightFighter, onReady) {
-        // Restore any stale hidden state from an interrupted previous fight first
+    playArenaEntrance(fightersOrLeft, maybeRightOrCb, maybeCb) {
         this.returnFightersFromArena(null, true);
+
+        const onReady = typeof maybeRightOrCb === 'function' ? maybeRightOrCb : maybeCb;
+        const fighterList = Array.isArray(fightersOrLeft)
+            ? fightersOrLeft
+            : [fightersOrLeft, typeof maybeRightOrCb === 'object' ? maybeRightOrCb : null].filter(Boolean);
 
         const participants = [];
         const panelBox = Main.layoutManager?.panelBox;
@@ -555,9 +1051,10 @@ export class PetStageManager {
         const pw = (Number.isFinite(panelBox?.width) && panelBox.width > 64) ? panelBox.width : 1280;
         const centerX = Math.round(px + pw / 2);
 
-        const findParticipant = (fighter, slotOffset) => {
+        fighterList.forEach((fighter, idx) => {
             if (!fighter)
                 return;
+            const slotOffset = (idx % 2 === 0 ? -1 : 1) * (24 + idx * 16);
             if (fighter.id && this.localActors.has(fighter.id)) {
                 participants.push({
                     actor: this.localActors.get(fighter.id),
@@ -571,10 +1068,7 @@ export class PetStageManager {
                     cry: `${fighter.name}：应战！我来也 ⚔️🔥`,
                 });
             }
-        };
-
-        findParticipant(leftFighter, -44);
-        findParticipant(rightFighter, 12);
+        });
 
         if (participants.length === 0) {
             onReady?.();
@@ -609,9 +1103,6 @@ export class PetStageManager {
         }
     }
 
-    /**
-     * Restore any pets that dived into the Arena back onto the Top Bar!
-     */
     returnFightersFromArena(winnerId = null, silentReset = false) {
         if (this._arenaFallbackTimerId) {
             GLib.Source.remove(this._arenaFallbackTimerId);
@@ -653,11 +1144,24 @@ export class PetStageManager {
                         effects: this._effects,
                         sysMonitor: this._sysMonitor,
                         callbacks: {
-                            onStartPracticeBattle: opp => this._callbacks.onStartPracticeBattle?.(opp),
+                            onStartPracticeBattle: (opp, mode) => this._callbacks.onStartPracticeBattle?.(opp, mode),
+                            onStartBossRaid: () => this._callbacks.onStartBossRaid?.(),
                             onRequestReleasePet: id => this.releasePetWithAnimation(id),
                             onOpenPrefs: () => this._callbacks.onOpenPrefs?.(),
+                            canTakeAirSlot: id => this.canTakeAirSlot(id),
+                            canPerchOnLedge: (mw, id) => this.canPerchOnLedge(mw, id),
+                            onWorldBossHit: pet => {
+                                const dmg = 14 + (pet.level || 1) * 3;
+                                this._damageWorldBoss(dmg, false);
+                            },
+                            onEggFound: () => {
+                                this.syncSafeGapEggBadge();
+                                this._callbacks.onDirectorStateChanged?.();
+                            },
                         },
                     });
+                    if (this._ecoActive)
+                        actor.setEcoMode(true);
                     this.localActors.set(petRec.id, actor);
                 }
             });
@@ -670,6 +1174,8 @@ export class PetStageManager {
                 this.localActors.delete(id);
             }
         }
+
+        this._rebalanceRoamDirector();
     }
 
     releasePetWithAnimation(petId) {
@@ -680,6 +1186,7 @@ export class PetStageManager {
             actor.playFarewellAndDestroy(() => {
                 this._releasingIds.delete(petId);
                 this._roster.releasePet(petId);
+                this._rebalanceRoamDirector();
             });
         } else {
             this._roster.releasePet(petId);
@@ -691,6 +1198,8 @@ export class PetStageManager {
             actor.clampToMonitor();
         for (const remote of this.remoteActors.values())
             remote.updateFromBeacon(remote.peer, true);
+        this._rebalanceRoamDirector();
+        this.syncSafeGapEggBadge();
     }
 
     onPeerBeacon(peerInfo, isNew) {
@@ -703,7 +1212,9 @@ export class PetStageManager {
                 perception: this._perception,
                 lanManager: this._lanManager,
                 effects: this._effects,
-                onChallengePeer: peer => this._callbacks.onChallengeLanPeer?.(peer),
+                callbacks: {
+                    onChallengeLanPeer: (peer, mode) => this._callbacks.onChallengeLanPeer?.(peer, mode),
+                },
             });
             this.remoteActors.set(peerInfo.peerId, remote);
             if (isNew) {
@@ -729,14 +1240,10 @@ export class PetStageManager {
             remote.reloadSkin();
     }
 
-    /**
-     * Automatic Pet-to-Pet Duo Interactions (9 choreographies across Sibling & LAN Visitor Pets!)
-     */
     _checkPetToPetEncounters() {
         const now = Date.now();
         const locals = Array.from(this.localActors.values()).filter(a => a.isAvailableForSocial());
 
-        // 1. Sibling-to-Sibling encounters (among all active adopted pets!)
         for (let i = 0; i < locals.length; i++) {
             const a = locals[i];
             if (!a.isAvailableForSocial() || now - a.lastSocialMs < 8500)
@@ -758,7 +1265,6 @@ export class PetStageManager {
             }
         }
 
-        // 2. Local-to-LAN Visitor encounters (2D aware)!
         for (const local of locals) {
             if (now - local.lastSocialMs < 9500)
                 continue;
@@ -769,7 +1275,6 @@ export class PetStageManager {
                 if (Math.abs(snapL.x - remote.getX()) <= 42 && Math.abs(snapL.y - remote.getY()) <= 36) {
                     const visitorKinds = ['high_five', 'sync_dance', 'spar_clash', 'leapfrog', 'nuzzle', 'gossip_chat'];
                     const chosen = visitorKinds[Math.floor(Math.random() * visitorKinds.length)];
-                    // For leapfrog with a remote visitor, remote crouches ('A') while local vaults over ('B')!
                     const localRole = chosen === 'leapfrog' ? 'B' : 'A';
                     remote.triggerSocialReaction(chosen, snapL.x);
                     local.triggerSocialInteraction(remote.peer.petName, remote.getX(), chosen, localRole);
