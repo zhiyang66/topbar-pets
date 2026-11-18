@@ -51,7 +51,7 @@ const CLASS_PRACTICE_FX = {
     martial: 'melee/claw-swipe',
     fire: 'fire/fire-ring',
     ice: 'ice/ice-crystal',
-    storm: 'lightning/spark-arc',
+    storm: 'lightning/electrified',
     arcane: 'arcane/magic-circle-cast',
     holy: 'holy/heal-aoe',
 };
@@ -473,7 +473,7 @@ export class PetActor {
             case 'magic_duel':
                 this._setState('cast', 1750);
                 if (role === 'A') {
-                    this._effects.spawnPixelFxBurst(midX + this._petW / 2, this._y + this._petH, 'lightning/spark-arc', 1);
+                    this._effects.spawnPixelFxBurst(midX + this._petW / 2, this._y + this._petH, 'lightning/zap-hit', 1);
                     this.say(`与 ${partnerName} 元素魔力共鸣中 🔮⚡`, 2200);
                 } else {
                     this._effects.spawnParticle(this._x + this._petW / 2, this._y, '🔮', 20);
@@ -751,7 +751,7 @@ export class PetActor {
         this._alignBesideTarget(target);
         this._setState('cast', 1650);
 
-        const fxChoices = ['arcane/magic-circle-cast', 'holy/heal-aoe', 'lightning/spark-arc'];
+        const fxChoices = ['arcane/magic-circle-cast', 'holy/heal-aoe', 'lightning/electrified'];
         this._effects.spawnPixelFxBurst(target.x + target.w / 2, this._y + this._petH + 2, pick(fxChoices), 1);
 
         if (Math.random() < 0.82) {

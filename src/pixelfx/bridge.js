@@ -31,6 +31,8 @@ import * as blizzardVortex from './fx/ice/blizzard-vortex.js';
 
 // Lightning & Storm
 import * as sparkArc from './fx/lightning/spark-arc.js';
+import * as zapHit from './fx/lightning/zap-hit.js';
+import * as electrified from './fx/lightning/electrified.js';
 import * as plasmaBall from './fx/lightning/plasma-ball.js';
 import * as chargeUp from './fx/lightning/charge-up.js';
 import * as chainLightning from './fx/lightning/chain-lightning.js';
@@ -103,6 +105,8 @@ export const FX_MODULES = {
     'ice/blizzard-vortex': blizzardVortex,
 
     'lightning/spark-arc': sparkArc,
+    'lightning/zap-hit': zapHit,
+    'lightning/electrified': electrified,
     'lightning/plasma-ball': plasmaBall,
     'lightning/charge-up': chargeUp,
     'lightning/chain-lightning': chainLightning,

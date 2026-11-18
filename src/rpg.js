@@ -72,8 +72,8 @@ export const CLASS_ARCHETYPES = {
         baseAtk: 18, atkPerLv: 3.3,
         baseSpd: 1.25, critRate: 0.30,
         skills: [
-            { id: 's1', unlockLv: 1, name: '电弧疾袭', type: 'melee', power: 1.02, cd: 1.8, fxMain: 'lightning/spark-arc', fxHit: 'lightning/spark-arc' },
-            { id: 's2', unlockLv: 2, name: '高压电浆球', type: 'projectile', power: 1.32, cd: 3.4, fxMain: 'lightning/plasma-ball', fxHit: 'impacts/crit-hit' },
+            { id: 's1', unlockLv: 1, name: '电弧疾袭', type: 'melee', power: 1.02, cd: 1.8, fxMain: 'lightning/zap-hit', fxHit: 'lightning/electrified' },
+            { id: 's2', unlockLv: 2, name: '高压电浆弹', type: 'projectile', power: 1.32, cd: 3.4, fxMain: 'fire/fireball', fxPalette: ['#0a1236', '#1d4ed8', '#2563eb', '#38bdf8', '#7dd3fc', '#e0f2fe', '#ffffff'], fxHit: 'lightning/zap-hit' },
             { id: 's3', unlockLv: 4, name: '幻影瞬步背刺', type: 'blink_strike', power: 1.62, cd: 5.5, fxCast: 'arcane/blink-out', fxMain: 'arcane/blink-in', fxHit: 'melee/double-slash' },
             { id: 's4', unlockLv: 6, name: '超载雷能激活', type: 'buff_shield', power: 0.0, healPct: 0.12, shieldSec: 3.5, cd: 7.6, fxMain: 'lightning/charge-up' },
             { id: 's5', unlockLv: 9, name: '狂暴连锁闪电', type: 'ranged_instant', power: 2.08, cd: 7.2, fxMain: 'lightning/chain-lightning', fxHit: 'impacts/crit-hit' },
@@ -89,8 +89,8 @@ export const CLASS_ARCHETYPES = {
         baseAtk: 18.5, atkPerLv: 3.4,
         baseSpd: 1.08, critRate: 0.23,
         skills: [
-            { id: 'a1', unlockLv: 1, name: '秘法法球冲击', type: 'projectile', power: 1.02, cd: 2.0, fxMain: 'arcane/arcane-orb', fxHit: 'explosions/cartoon-pow' },
-            { id: 'a2', unlockLv: 2, name: '追踪奥术飞弹', type: 'projectile', power: 1.35, cd: 3.5, fxMain: 'arcane/arcane-missiles', fxHit: 'impacts/crit-hit' },
+            { id: 'a1', unlockLv: 1, name: '秘法星弹', type: 'projectile', power: 1.02, cd: 2.0, fxMain: 'fire/fireball', fxPalette: ['#1e0936', '#581c87', '#7e22ce', '#a855f7', '#e879f9', '#fae8ff', '#ffffff'], fxHit: 'explosions/cartoon-pow' },
+            { id: 'a2', unlockLv: 2, name: '追踪奥术飞弹', type: 'ranged_instant', power: 1.35, cd: 3.5, fxMain: 'arcane/arcane-missiles', fxHit: 'impacts/crit-hit' },
             { id: 'a3', unlockLv: 4, name: '暗影虚空爆破', type: 'ranged_instant', power: 1.60, cd: 5.3, fxMain: 'shadow/dark-explosion' },
             { id: 'a4', unlockLv: 6, name: '时间凝滞领域', type: 'ranged_instant', power: 1.25, slowSec: 3.8, cd: 7.8, fxMain: 'arcane/time-stop' },
             { id: 'a5', unlockLv: 9, name: '深渊引力黑洞', type: 'ranged_instant', power: 2.10, cd: 7.8, fxMain: 'shadow/black-hole', fxHit: 'impacts/crit-hit' },
@@ -107,7 +107,7 @@ export const CLASS_ARCHETYPES = {
         baseSpd: 1.02, critRate: 0.18,
         skills: [
             { id: 'h1', unlockLv: 1, name: '荆棘藤鞭抽击', type: 'melee', power: 1.0, cd: 1.9, fxMain: 'nature/vine-whip', fxHit: 'explosions/cartoon-pow' },
-            { id: 'h2', unlockLv: 2, name: '翠绿飞叶风暴', type: 'projectile', power: 1.28, cd: 3.5, fxMain: 'nature/leaf-storm', fxHit: 'nature/healing-bloom' },
+            { id: 'h2', unlockLv: 2, name: '翠绿穿刺飞叶', type: 'projectile', power: 1.28, cd: 3.5, fxMain: 'ice/ice-lance', fxPalette: ['#052e16', '#14532d', '#15803d', '#22c55e', '#86efac', '#dcfce7', '#ffffff'], fxHit: 'nature/healing-bloom' },
             { id: 'h3', unlockLv: 4, name: '大地岩刺突袭', type: 'ranged_instant', power: 1.55, cd: 5.2, knockback: 22, fxMain: 'nature/earth-spike' },
             { id: 'h4', unlockLv: 6, name: '复苏治愈花环', type: 'buff_shield', power: 0.0, healPct: 0.18, shieldSec: 3.0, cd: 8.2, fxMain: 'nature/healing-bloom', fxHit: 'holy/heal-aoe' },
             { id: 'h5', unlockLv: 9, name: '神圣不灭护盾', type: 'buff_shield', power: 1.25, healPct: 0.12, shieldSec: 4.8, cd: 8.5, fxMain: 'holy/divine-shield', fxHit: 'holy/smite' },

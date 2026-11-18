@@ -6,7 +6,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { addChromeActor, removeChromeActor, boxLayoutProps } from './compat.js';
 import { loadSpriteBankForProfile } from './spriteLoader.js';
 import { computeCombatStats, getArchetype } from './rpg.js';
-import { PixelFxSurface, FX_MODULES } from './pixelfx/bridge.js';
+import { PixelFxSurface } from './pixelfx/bridge.js';
 
 const STAGE_LOGICAL_W = 480;
 const STAGE_LOGICAL_H = 180;
@@ -15,49 +15,76 @@ const STAGE_W = STAGE_LOGICAL_W * PIXEL_SCALE; // 480
 const STAGE_H = STAGE_LOGICAL_H * PIXEL_SCALE; // 180
 const GROUND_Y = 118;
 const FIGHTER_SIZE = 52;
-const FLOOR_Y = GROUND_Y + FIGHTER_SIZE - 3; // 167: exact paw/floor contact line
-const PET_BODY_Y = GROUND_Y + 34;            // 152: visual torso center of 48x48 chibi pet
+const FLOOR_Y = GROUND_Y + FIGHTER_SIZE - 2; // 168: exact paw/floor contact line
+const PET_BODY_Y = GROUND_Y + 36;            // 154: visual torso center of 48x48 chibi pet
 
-// Floor-rooted effects whose local y=0 should sit directly on FLOOR_Y (167)
+// Floor-rooted effects whose base (y=0) sits directly on FLOOR_Y (168)
 const FLOOR_ROOTED_FX = new Set([
     'spawn/poof', 'spawn/spawn-portal', 'spawn/respawn-beam', 'ui/level-up',
     'arcane/magic-circle-cast', 'fire/flame-pillar', 'fire/fire-tornado', 'fire/meteor',
     'holy/holy-pillar', 'holy/smite', 'holy/heal-aoe',
     'nature/earth-spike', 'nature/healing-bloom',
-    'ice/frost-nova', 'ice/ice-spikes', 'ice/blizzard-vortex',
+    'ice/frost-nova', 'ice/ice-spikes',
     'impacts/ground-slam', 'lightning/lightning-strike', 'lightning/thunderclap',
     'explosions/big-explosion', 'shadow/dark-explosion',
 ]);
 
-// Directional beam/breath effects that originate from the caster's mouth/hand toward the foe
-const CASTER_MUZZLE_FX = new Set([
+// Directional effects whose origin is at the caster's position/muzzle shooting forward (+x)
+const CASTER_ORIGIN_FX = new Set([
+    'melee/claw-swipe', 'melee/double-slash', 'melee/hammer-smash',
+    'melee/heavy-cleave', 'melee/dagger-flurry', 'melee/uppercut',
+    'nature/vine-whip',
     'fire/fire-breath', 'ice/frost-breath',
-    'lightning/chain-lightning', 'arcane/arcane-beam', 'ice/ice-spikes',
+    'lightning/chain-lightning', 'arcane/arcane-missiles', 'arcane/arcane-beam', 'ice/ice-spikes',
 ]);
 
-/**
- * Compute exact PixelFX Y coordinate aligned to our chibi pet's body or paws!
- * - `bg: "dark"` effects (fireball, ice-lance, fire-breath, cartoon-pow) have (0,0) at visual center -> PET_BODY_Y (152).
- * - Floor-rooted `bg: "ground"` effects (pillars, spikes, magic circles, poof) -> FLOOR_Y (167).
- * - Body-centered `bg: "ground"` effects (slashes, shields, parry, crit-hit, orbs) draw ~23px above y -> FLOOR_Y + 8 (175 -> renders at 152!).
- */
+// Exact pixel-measured vertical centroid offset (dy relative to opts.y) from PixelFX frame simulation!
+// Setting opts.y = PET_BODY_Y - FX_CENTROID_DY[fxId] places every effect's visual center dead-on at PET_BODY_Y (154)!
+const FX_CENTROID_DY = {
+    'melee/claw-swipe': -15,
+    'melee/double-slash': -25,
+    'melee/hammer-smash': -21,
+    'melee/heavy-cleave': -21,
+    'melee/spin-slash': -14,
+    'melee/uppercut': -36,
+    'melee/dagger-flurry': -23,
+    'fire/fireball': -2,
+    'fire/fire-breath': -13,
+    'fire/fire-ring': -12,
+    'ice/ice-lance': 0,
+    'ice/frost-breath': 2,
+    'ice/ice-crystal': -25,
+    'ice/blizzard-vortex': -34,
+    'lightning/zap-hit': -1,
+    'lightning/electrified': -15,
+    'lightning/charge-up': -26,
+    'lightning/chain-lightning': -24,
+    'arcane/arcane-missiles': -25,
+    'arcane/arcane-orb': -42,
+    'arcane/blink-out': -13,
+    'arcane/blink-in': -12,
+    'arcane/time-stop': -33,
+    'arcane/star-fall': -40,
+    'arcane/arcane-beam': -14,
+    'shadow/black-hole': -58,
+    'nature/vine-whip': -26,
+    'nature/leaf-storm': -34,
+    'holy/divine-shield': -23,
+    'impacts/crit-hit': -26,
+    'impacts/shield-block': -21,
+    'impacts/parry': -32,
+    'explosions/cartoon-pow': 0,
+};
+
 function getAlignedFxY(fxId, jumpY = 0) {
-    const mod = FX_MODULES[fxId];
-    const bg = mod?.meta?.bg || 'ground';
-    if (bg !== 'ground')
-        return Math.round(PET_BODY_Y + jumpY);
     if (FLOOR_ROOTED_FX.has(fxId))
         return Math.round(FLOOR_Y + jumpY);
-    return Math.round(FLOOR_Y + 8 + jumpY);
+    const dy = FX_CENTROID_DY[fxId] ?? -20;
+    return Math.round(PET_BODY_Y + jumpY - dy);
 }
 
-/**
- * Extra render Y offset for flying projectiles whose underlying PixelFX module is `bg: "ground"`
- * (e.g. plasma-ball, arcane-orb, arcane-missiles, leaf-storm draw ~23px above options.y).
- */
 function getProjectileRenderOffsetY(fxId) {
-    const mod = FX_MODULES[fxId];
-    return (mod?.meta?.bg === 'ground') ? 23 : 0;
+    return -(FX_CENTROID_DY[fxId] ?? 0);
 }
 
 /**
@@ -969,6 +996,7 @@ export class BattleArenaManager {
                 y: Math.round(spawnY + renderOffsetY),
                 flip: flipFx,
                 manualLifetime: true,
+                ...(chosen.fxPalette ? { palette: chosen.fxPalette } : {}),
             });
             projectiles.push({
                 attacker: me,
@@ -1018,11 +1046,9 @@ export class BattleArenaManager {
 
         let fxX;
         let anchorJumpY = defender.jumpY;
-        if (CASTER_MUZZLE_FX.has(mainFxId)) {
-            fxX = Math.round(attCenter + (flipFx ? -14 : 14));
+        if (CASTER_ORIGIN_FX.has(mainFxId)) {
+            fxX = Math.round(attCenter + (flipFx ? -8 : 8));
             anchorJumpY = attacker.jumpY;
-        } else if (skill.type === 'melee' || skill.type === 'leap_melee' || skill.type === 'blink_strike') {
-            fxX = Math.round((attCenter + defCenter) / 2);
         } else {
             fxX = Math.round(defCenter);
         }
