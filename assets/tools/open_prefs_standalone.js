@@ -40,7 +40,7 @@ app.connect('activate', () => {
         title: '顶部栏宠物 · 小队管理与 AI 提示词工坊',
         application: app,
     });
-    populatePreferencesWindow(win, settings);
+    populatePreferencesWindow(win, settings, extRoot);
     win.present();
 
     if (GLib.getenv('TOPBAR_PET_PREFS_SELFTEST') === '1') {

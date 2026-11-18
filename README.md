@@ -65,13 +65,25 @@ topbar-pets/
 
 ## 🚀 安装与使用指南
 
-### 1. 一键编译并安装到桌面
+### 方式 A：直接下载 GitHub Release 安装包（推荐普通用户）
+前往 [GitHub Releases](https://github.com/zhiyang66/topbar-pets/releases) 下载最新 `topbar-pet@local.gnome-extension.shell-extension.zip`：
+```bash
+gnome-extensions install --force topbar-pet@local.gnome-extension.shell-extension.zip
+# Wayland 下首次安装注销重登一次桌面，之后启用即可：
+gnome-extensions enable topbar-pet@local.gnome-extension
+```
+> **在线检测与一键更新**：安装后插件支持自动检测 GitHub Releases 新版本，也可随时在右上角菜单点击 **「🔍 检查插件更新」** 或在设置面板 **「联机·显示·更新」** 页点击 **「🚀 一键更新」** 在线覆盖升级！
+
+### 方式 B：源码一键编译安装（开发者）
 ```bash
 git clone git@github.com:zhiyang66/topbar-pets.git
 cd topbar-pets
 ./scripts/install.sh
 ```
-> **Wayland 首次安装说明**：GNOME Wayland 首次安装新扩展需**注销并重新登录一次桌面**（之后更新无需再注销），登录即可在顶部栏看到宠物。
+发布新版本 Release 只需执行一行命令（自动触发 GitHub Actions 打包上传 `.zip`）：
+```bash
+./scripts/release.sh 2.1.0 "feat: 新版本更新说明"
+```
 
 ### 2. 免注销立即窗口化预览（开发调试模式）
 ```bash

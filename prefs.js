@@ -3,6 +3,6 @@ import { populatePreferencesWindow } from './src/prefsBuilder.js';
 
 export default class TopBarPetPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        populatePreferencesWindow(window, this.getSettings());
+        populatePreferencesWindow(window, this.getSettings(), this.path);
     }
 }

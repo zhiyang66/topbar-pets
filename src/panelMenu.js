@@ -24,6 +24,7 @@ class PetPanelIndicator extends PanelMenu.Button {
         lanManager,
         battleArena,
         sysMonitor,
+        updateChecker,
         onOpenPrefs,
     }) {
         super._init(0.5, 'TopBar Pet Indicator', false);
@@ -35,6 +36,7 @@ class PetPanelIndicator extends PanelMenu.Button {
         this._lanManager = lanManager;
         this._battleArena = battleArena;
         this._sysMonitor = sysMonitor;
+        this._updateChecker = updateChecker;
         this._onOpenPrefs = onOpenPrefs;
         this._mockPeerProc = null;
 
@@ -227,9 +229,46 @@ class PetPanelIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+        this._updateMenuItem = this.menu.addAction(
+            `🔍 检查插件更新 (v${this._updateChecker?.currentVersion || '2.0.0'})`,
+            () => this._handleUpdateMenuClick()
+        );
+        this.refreshUpdateItem();
+
         this.menu.addAction('⚙️ 宠物管理 / 领养 / ✨AI提示词工坊…', () => {
             this._onOpenPrefs?.();
         });
+    }
+
+    _handleUpdateMenuClick() {
+        if (!this._updateChecker)
+            return;
+        if (this._updateChecker.hasUpdate) {
+            this._stageManager.getPrimaryActor()?.say(`⬇️ 正在下载安装 v${this._updateChecker.latestVersion} 更新…`, 3000);
+            this._updateChecker.downloadAndInstallUpdate().then(res => {
+                this._stageManager.getPrimaryActor()?.say(res.message, 4000);
+            });
+        } else {
+            this._stageManager.getPrimaryActor()?.say('🔍 正在连接 GitHub 检查插件新版本…', 2200);
+            this._updateChecker.checkForUpdates().then(snap => {
+                this._stageManager.getPrimaryActor()?.say(snap.statusText, 3200);
+            });
+        }
+    }
+
+    refreshUpdateItem() {
+        if (!this._updateMenuItem || !this._updateChecker)
+            return;
+        const snap = this._updateChecker.getSnapshot();
+        if (snap.isInstalling) {
+            this._updateMenuItem.label.text = `⏳ 正在安装 v${snap.latestVersion || ''} 更新…`;
+        } else if (snap.isChecking) {
+            this._updateMenuItem.label.text = '🔍 正在检查 GitHub 新版本…';
+        } else if (snap.hasUpdate) {
+            this._updateMenuItem.label.text = `🚀 发现新版本 v${snap.latestVersion}（点此一键更新！）`;
+        } else {
+            this._updateMenuItem.label.text = `🔍 检查插件更新 (当前 v${snap.currentVersion})`;
+        }
     }
 
     _rebuildDynamicSubmenus() {

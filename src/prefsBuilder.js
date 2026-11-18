@@ -13,6 +13,7 @@ import {
     xpRequiredForLevel,
     getArchetype,
 } from './rpg.js';
+import { UpdateChecker, RELEASES_PAGE_URL } from './updateChecker.js';
 
 const ARCHETYPE_LIST = Object.values(CLASS_ARCHETYPES);
 
@@ -96,7 +97,7 @@ function createSwitchRow({ title, subtitle, settings, key }) {
     return row;
 }
 
-export function populatePreferencesWindow(window, settings) {
+export function populatePreferencesWindow(window, settings, extensionPath = '') {
     window.set_default_size(740, 760);
     window.set_search_enabled(true);
 
@@ -584,7 +585,7 @@ export function populatePreferencesWindow(window, settings) {
     // TAB 4: 🌐 局域网联机与显示控制
     // =========================================================================
     const pageNet = new Adw.PreferencesPage({
-        title: '局域网与显示',
+        title: '联机·显示·更新',
         icon_name: 'network-workgroup-symbolic',
     });
 
@@ -618,6 +619,82 @@ export function populatePreferencesWindow(window, settings) {
     dispGroup.add(createSwitchRow({ title: '鼠标穿透模式 (Ghost Mode)', settings, key: 'click-through' }));
     dispGroup.add(createSwitchRow({ title: '显示右上角状态栏小猫图标', settings, key: 'show-panel-icon' }));
     pageNet.add(dispGroup);
+
+    // =========================================================================
+    // GitHub Release Auto-Check & One-Click Self-Updater Group
+    // =========================================================================
+    const resolvedExtPath = extensionPath || GLib.build_filenamev([
+        GLib.get_user_data_dir(), 'gnome-shell', 'extensions', 'topbar-pet@local.gnome-extension',
+    ]);
+    const updater = new UpdateChecker({
+        extensionPath: resolvedExtPath,
+        settings,
+    });
+    window.connect('close-request', () => {
+        updater.destroy();
+        return false;
+    });
+
+    const updateGroup = new Adw.PreferencesGroup({
+        title: '🔄 插件版本检测与一键在线更新',
+        description: '直接连接 GitHub Releases (zhiyang66/topbar-pets) 检查新版本，支持一键下载并覆盖安装更新包。',
+    });
+
+    updateGroup.add(createSwitchRow({
+        title: '启动后自动静默检查新版本',
+        subtitle: '发现新版本时宠物会在顶部栏轻声提醒',
+        settings,
+        key: 'auto-check-updates',
+    }));
+
+    const versionRow = new Adw.ActionRow({
+        title: `当前已安装版本：v${updater.currentVersion}`,
+        subtitle: updater.statusText,
+    });
+
+    const updBtnBox = new Gtk.Box({
+        orientation: Gtk.Orientation.HORIZONTAL,
+        spacing: 8,
+        valign: Gtk.Align.CENTER,
+    });
+
+    const checkBtn = new Gtk.Button({ label: '🔍 检查更新' });
+    const installBtn = new Gtk.Button({
+        label: '🚀 一键更新',
+        css_classes: ['suggested-action'],
+        visible: false,
+    });
+    const notesBtn = new Gtk.Button({ label: '🌐 Release 页面' });
+
+    const syncUpdateRowUi = snap => {
+        versionRow.set_title(`当前已安装版本：v${snap.currentVersion}`);
+        versionRow.set_subtitle(snap.statusText);
+        checkBtn.set_sensitive(!snap.isChecking && !snap.isInstalling);
+        installBtn.set_visible(Boolean(snap.hasUpdate));
+        installBtn.set_sensitive(!snap.isInstalling);
+        if (snap.hasUpdate)
+            installBtn.set_label(`🚀 一键更新至 v${snap.latestVersion}`);
+    };
+    updater._onUpdateStateChanged = syncUpdateRowUi;
+
+    checkBtn.connect('clicked', () => {
+        updater.checkForUpdates();
+    });
+    installBtn.connect('clicked', () => {
+        updater.downloadAndInstallUpdate();
+    });
+    notesBtn.connect('clicked', () => {
+        try {
+            Gio.AppInfo.launch_default_for_uri(updater.htmlUrl || RELEASES_PAGE_URL, null);
+        } catch (_e) {}
+    });
+
+    updBtnBox.append(checkBtn);
+    updBtnBox.append(installBtn);
+    updBtnBox.append(notesBtn);
+    versionRow.add_suffix(updBtnBox);
+    updateGroup.add(versionRow);
+    pageNet.add(updateGroup);
 
     window.add(pageNet);
 }

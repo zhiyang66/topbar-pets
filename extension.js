@@ -11,12 +11,21 @@ import { LanManager } from './src/lanManager.js';
 import { BattleArenaManager } from './src/battleArena.js';
 import { PetStageManager } from './src/petStageManager.js';
 import { PetPanelIndicator } from './src/panelMenu.js';
+import { UpdateChecker } from './src/updateChecker.js';
 
 export default class TopBarPetExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
         this._effects = new EffectsManager();
         this._prefsProc = null;
+
+        this._updateChecker = new UpdateChecker({
+            extensionPath: this.path,
+            settings: this._settings,
+            onUpdateStateChanged: () => {
+                this._indicator?.refreshUpdateItem();
+            },
+        });
 
         this._sysMonitor = new SystemMonitor(() => {
             this._indicator?.refreshStats();
@@ -114,6 +123,14 @@ export default class TopBarPetExtension extends Extension {
         // Connect BattleArena <-> StageManager so fighting pets run to Top-Center & hide during battle!
         this._battleArena.setStageManager(this._stageManager);
 
+        // Start silent periodic GitHub Releases update check (first check 12s after startup)
+        this._updateChecker.startAutoCheck(info => {
+            this._stageManager?.getPrimaryActor()?.say(
+                `🎉 发现新版本 v${info.latestVersion}！可在右上角菜单一键更新哟 ✨`,
+                3800
+            );
+        });
+
         this._indicator = null;
         this._syncPanelIndicator();
 
@@ -185,6 +202,7 @@ export default class TopBarPetExtension extends Extension {
                 lanManager: this._lanManager,
                 battleArena: this._battleArena,
                 sysMonitor: this._sysMonitor,
+                updateChecker: this._updateChecker,
                 onOpenPrefs: () => this._openPetPreferences(),
             });
             Main.panel.addToStatusArea(this.uuid, this._indicator);
@@ -213,6 +231,11 @@ export default class TopBarPetExtension extends Extension {
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;
+        }
+
+        if (this._updateChecker) {
+            this._updateChecker.destroy();
+            this._updateChecker = null;
         }
 
         if (this._battleArena) {

@@ -59,5 +59,10 @@
       <summary>Show Control Menu Icon in Top Bar</summary>
     </key>
 
+    <key name="auto-check-updates" type="b">
+      <default>true</default>
+      <summary>Automatically Check GitHub Releases for Extension Updates</summary>
+    </key>
+
   </schema>
 </schemalist>

@@ -1,0 +1,73 @@
+name: Build & Publish GNOME Extension Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to publish (e.g. v2.0.0)'
+        required: true
+        default: 'v2.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Pack Extension & Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install GSettings schema compiler & zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-bin zip python3
+
+      - name: Sync version-name & build extension bundle
+        id: pack
+        run: |
+          RAW_TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          CLEAN_VER="${RAW_TAG#v}"
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$CLEAN_VER" >> "$GITHUB_OUTPUT"
+
+          python3 - "$CLEAN_VER" << 'PY'
+          import json, sys
+          ver = sys.argv[1]
+          with open("metadata.json", "r", encoding="utf-8") as f:
+              meta = json.load(f)
+          meta["version-name"] = ver
+          with open("metadata.json", "w", encoding="utf-8") as f:
+              json.dump(meta, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+
+          glib-compile-schemas --strict schemas
+
+          mkdir -p dist
+          BUNDLE="dist/topbar-pet@local.gnome-extension.shell-extension.zip"
+          zip -r "$BUNDLE" \
+            metadata.json \
+            extension.js \
+            prefs.js \
+            stylesheet.css \
+            README.md \
+            schemas/ \
+            src/ \
+            assets/ \
+            -x "*/__pycache__/*" "*.pyc"
+
+          ls -lh "$BUNDLE"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.pack.outputs.tag }}
+          name: "TopBar Pets ${{ steps.pack.outputs.tag }}"
+          generate_release_notes: true
+          files: |
+            dist/topbar-pet@local.gnome-extension.shell-extension.zip
