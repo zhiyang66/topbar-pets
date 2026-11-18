@@ -6,7 +6,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { addChromeActor, removeChromeActor, boxLayoutProps } from './compat.js';
 import { loadSpriteBankForProfile } from './spriteLoader.js';
 import { computeCombatStats, getArchetype } from './rpg.js';
-import { PixelFxSurface } from './pixelfx/bridge.js';
+import { PixelFxSurface, FX_MODULES } from './pixelfx/bridge.js';
 
 const STAGE_LOGICAL_W = 480;
 const STAGE_LOGICAL_H = 180;
@@ -15,6 +15,50 @@ const STAGE_W = STAGE_LOGICAL_W * PIXEL_SCALE; // 480
 const STAGE_H = STAGE_LOGICAL_H * PIXEL_SCALE; // 180
 const GROUND_Y = 118;
 const FIGHTER_SIZE = 52;
+const FLOOR_Y = GROUND_Y + FIGHTER_SIZE - 3; // 167: exact paw/floor contact line
+const PET_BODY_Y = GROUND_Y + 34;            // 152: visual torso center of 48x48 chibi pet
+
+// Floor-rooted effects whose local y=0 should sit directly on FLOOR_Y (167)
+const FLOOR_ROOTED_FX = new Set([
+    'spawn/poof', 'spawn/spawn-portal', 'spawn/respawn-beam', 'ui/level-up',
+    'arcane/magic-circle-cast', 'fire/flame-pillar', 'fire/fire-tornado', 'fire/meteor',
+    'holy/holy-pillar', 'holy/smite', 'holy/heal-aoe',
+    'nature/earth-spike', 'nature/healing-bloom',
+    'ice/frost-nova', 'ice/ice-spikes', 'ice/blizzard-vortex',
+    'impacts/ground-slam', 'lightning/lightning-strike', 'lightning/thunderclap',
+    'explosions/big-explosion', 'shadow/dark-explosion',
+]);
+
+// Directional beam/breath effects that originate from the caster's mouth/hand toward the foe
+const CASTER_MUZZLE_FX = new Set([
+    'fire/fire-breath', 'ice/frost-breath',
+    'lightning/chain-lightning', 'arcane/arcane-beam', 'ice/ice-spikes',
+]);
+
+/**
+ * Compute exact PixelFX Y coordinate aligned to our chibi pet's body or paws!
+ * - `bg: "dark"` effects (fireball, ice-lance, fire-breath, cartoon-pow) have (0,0) at visual center -> PET_BODY_Y (152).
+ * - Floor-rooted `bg: "ground"` effects (pillars, spikes, magic circles, poof) -> FLOOR_Y (167).
+ * - Body-centered `bg: "ground"` effects (slashes, shields, parry, crit-hit, orbs) draw ~23px above y -> FLOOR_Y + 8 (175 -> renders at 152!).
+ */
+function getAlignedFxY(fxId, jumpY = 0) {
+    const mod = FX_MODULES[fxId];
+    const bg = mod?.meta?.bg || 'ground';
+    if (bg !== 'ground')
+        return Math.round(PET_BODY_Y + jumpY);
+    if (FLOOR_ROOTED_FX.has(fxId))
+        return Math.round(FLOOR_Y + jumpY);
+    return Math.round(FLOOR_Y + 8 + jumpY);
+}
+
+/**
+ * Extra render Y offset for flying projectiles whose underlying PixelFX module is `bg: "ground"`
+ * (e.g. plasma-ball, arcane-orb, arcane-missiles, leaf-storm draw ~23px above options.y).
+ */
+function getProjectileRenderOffsetY(fxId) {
+    const mod = FX_MODULES[fxId];
+    return (mod?.meta?.bg === 'ground') ? 23 : 0;
+}
 
 /**
  * Deterministic Mulberry32 PRNG so LAN peers play out the exact same tactical fight!
@@ -428,8 +472,8 @@ export class BattleArenaManager {
         fB.jumpY = -48;
         fB.vy = 1.6;
 
-        fxBack.spawn('spawn/poof', { x: fA.x + 26, y: GROUND_Y + 46 });
-        fxBack.spawn('spawn/poof', { x: fB.x + 26, y: GROUND_Y + 46 });
+        fxBack.spawn('spawn/poof', { x: fA.x + 26, y: FLOOR_Y });
+        fxBack.spawn('spawn/poof', { x: fB.x + 26, y: FLOOR_Y });
         fxFront.spawn('ui/countdown', { x: STAGE_W / 2, y: STAGE_H / 2 });
 
         const projectiles = [];
@@ -473,8 +517,8 @@ export class BattleArenaManager {
                     winner.vy = -6.5;
                     loser.anim = 'hurt';
 
-                    fxFront.spawn('ui/confetti', { x: Math.round(winner.x + 26), y: 65 });
-                    fxFront.spawn('ui/level-up', { x: Math.round(winner.x + 26), y: GROUND_Y + 44 });
+                    fxFront.spawn('ui/confetti', { x: Math.round(winner.x + 26), y: 78 });
+                    fxFront.spawn('ui/level-up', { x: Math.round(winner.x + 26), y: FLOOR_Y });
 
                     const localWon = (localPetId && winner.info.id === localPetId) || (!isLanBattle && winner === fA);
                     this._lastWinnerId = winner.info.id || null;
@@ -725,7 +769,11 @@ export class BattleArenaManager {
                 me.vy = -6.4;
                 me.anim = 'attack';
                 me.actionLockSec = 0.72;
-                fxFront.spawn('melee/uppercut', { x: Math.round((meCenter + foeCenter) / 2), y: GROUND_Y + 22, flip: me.facing === 'left' });
+                fxFront.spawn('melee/uppercut', {
+                    x: Math.round((meCenter + foeCenter) / 2),
+                    y: getAlignedFxY('melee/uppercut', 0),
+                    flip: me.facing === 'left',
+                });
                 announce(`⬆️ ${me.info.name} 下蹲闪避后打出【升龙反击】！`);
                 foe.vy = -6.5; // Launch opponent airborne!
                 this._applyDamage(me, foe, { name: '升龙反击', power: 1.35, knockback: 22, fxHit: 'impacts/crit-hit' }, 'mid', rng, fxFront, announce, addFreeze);
@@ -764,7 +812,7 @@ export class BattleArenaManager {
                     me.parryWindowSec = 0.25; // First 0.25s = Street-Fighter Perfect Parry!
                     me.defenseCdSec = 1.8;
                     me.anim = 'guard';
-                    fxBack.spawn('impacts/shield-block', { x: Math.round(meCenter), y: GROUND_Y + 26 });
+                    fxBack.spawn('impacts/shield-block', { x: Math.round(meCenter), y: getAlignedFxY('impacts/shield-block'), flip: me.facing === 'left' });
                     return;
                 } else if (reactRoll < 0.86) {
                     // TACTIC C: Backdash / Jump Evade!
@@ -774,7 +822,7 @@ export class BattleArenaManager {
                         me.jumpCdSec = 2.2;
                         me.defenseCdSec = 1.4;
                         me.anim = 'run';
-                        fxBack.spawn('spawn/poof', { x: Math.round(meCenter), y: GROUND_Y + 46 });
+                        fxBack.spawn('spawn/poof', { x: Math.round(meCenter), y: FLOOR_Y });
                         announce(`💨 ${me.info.name} 跃起翻越飞行道具！`);
                         return;
                     } else if (foeWindingUpClose) {
@@ -784,8 +832,8 @@ export class BattleArenaManager {
                         me.actionLockSec = 0.35;
                         me.defenseCdSec = 1.5;
                         me.anim = 'walk';
-                        fxBack.spawn('spawn/poof', { x: Math.round(meCenter), y: GROUND_Y + 46 });
-                        this._spawnFloatText?.(meCenter, GROUND_Y - 4, '💨 后撤闪避', 'evade');
+                        fxBack.spawn('spawn/poof', { x: Math.round(meCenter), y: FLOOR_Y });
+                        this._spawnFloatText?.(meCenter, GROUND_Y + 8, '💨 后撤闪避', 'evade');
                         return;
                     }
                 }
@@ -798,8 +846,8 @@ export class BattleArenaManager {
         if ((pinnedLeft || pinnedRight) && me.jumpY === 0 && rng() < 0.45) {
             me.rollSec = 0.38;
             me.rollVx = dirToFoe * 260;
-            fxBack.spawn('arcane/blink-out', { x: Math.round(meCenter), y: GROUND_Y + 32 });
-            this._spawnFloatText?.(meCenter, GROUND_Y - 4, '💨 翻滚绕背', 'evade');
+            fxBack.spawn('arcane/blink-out', { x: Math.round(meCenter), y: getAlignedFxY('arcane/blink-out') });
+            this._spawnFloatText?.(meCenter, GROUND_Y + 8, '💨 翻滚绕背', 'evade');
             announce(`💨 ${me.info.name} 灵巧翻滚脱离角落反客为主！`);
             return;
         }
@@ -812,7 +860,7 @@ export class BattleArenaManager {
             me.footsieDir = -dirToFoe;
             me.footsieSec = 0.55;
             me.actionLockSec = 0.38;
-            fxBack.spawn('spawn/poof', { x: Math.round(meCenter), y: GROUND_Y + 46 });
+            fxBack.spawn('spawn/poof', { x: Math.round(meCenter), y: FLOOR_Y });
             return;
         }
 
@@ -875,34 +923,33 @@ export class BattleArenaManager {
 
         const flipFx = me.facing === 'left';
         const meFxX = Math.round(meCenter);
-        const meFxY = Math.round(GROUND_Y + 26 + me.jumpY);
 
         announce(`${me.stats.archetypeBadge} ${me.info.name} 使出【${chosen.name}】！`);
 
         if (chosen.fxCast)
-            fxBack.spawn(chosen.fxCast, { x: meFxX, y: GROUND_Y + 44, flip: flipFx });
+            fxBack.spawn(chosen.fxCast, { x: meFxX, y: getAlignedFxY(chosen.fxCast, me.jumpY), flip: flipFx });
 
         if (chosen.type === 'buff_shield') {
             me.anim = 'cast';
             me.actionLockSec = 0.85;
             me.shieldSec = chosen.shieldSec || 3.8;
-            fxBack.spawn(chosen.fxMain, { x: meFxX, y: meFxY });
+            fxBack.spawn(chosen.fxMain, { x: meFxX, y: getAlignedFxY(chosen.fxMain, me.jumpY) });
             if (chosen.fxHit)
-                fxFront.spawn(chosen.fxHit, { x: meFxX, y: meFxY });
+                fxFront.spawn(chosen.fxHit, { x: meFxX, y: getAlignedFxY(chosen.fxHit, me.jumpY) });
             if (chosen.healPct) {
                 const heal = Math.round(me.maxHp * chosen.healPct);
                 me.hp = Math.min(me.maxHp, me.hp + heal);
-                this._spawnFloatText?.(meCenter, GROUND_Y - 6, `+${heal}`, 'heal');
+                this._spawnFloatText?.(meCenter, GROUND_Y + 6, `+${heal}`, 'heal');
             }
         } else if (chosen.type === 'blink_strike') {
-            fxBack.spawn('arcane/blink-out', { x: meFxX, y: meFxY });
+            fxBack.spawn('arcane/blink-out', { x: meFxX, y: getAlignedFxY('arcane/blink-out', me.jumpY) });
             const behindX = foe.x + (dx >= 0 ? 40 : -40);
             me.x = Math.max(16, Math.min(STAGE_W - me.bank.width - 16, behindX));
             me.facing = foe.x >= me.x ? 'right' : 'left';
             me.anim = 'attack';
             me.actionLockSec = 0.82;
             const newFxX = Math.round(me.x + me.bank.width / 2);
-            fxBack.spawn('arcane/blink-in', { x: newFxX, y: meFxY });
+            fxBack.spawn('arcane/blink-in', { x: newFxX, y: getAlignedFxY('arcane/blink-in', me.jumpY) });
             me.pendingStrike = {
                 timerSec: 0.18,
                 skill: chosen,
@@ -912,13 +959,14 @@ export class BattleArenaManager {
         } else if (chosen.type === 'projectile') {
             me.anim = 'cast';
             me.actionLockSec = 0.82;
-            // Most projectiles fly at chest/head height ('high') so Crouch can duck under them!
+            // High lane flies at mouth/head level (145: crouching ducks right under it!); low lane flies at belly/shin (156)
             const lane = rng() < 0.72 ? 'high' : 'low';
-            const spawnX = meCenter + (me.facing === 'right' ? 20 : -20);
-            const spawnY = lane === 'high' ? GROUND_Y + 14 + me.jumpY : GROUND_Y + 34 + me.jumpY;
+            const spawnX = meCenter + (me.facing === 'right' ? 18 : -18);
+            const spawnY = (lane === 'high' ? PET_BODY_Y - 6 : PET_BODY_Y + 5) + me.jumpY;
+            const renderOffsetY = getProjectileRenderOffsetY(chosen.fxMain);
             const fxInst = fxFront.spawn(chosen.fxMain, {
                 x: Math.round(spawnX),
-                y: Math.round(spawnY),
+                y: Math.round(spawnY + renderOffsetY),
                 flip: flipFx,
                 manualLifetime: true,
             });
@@ -929,6 +977,7 @@ export class BattleArenaManager {
                 lane,
                 x: spawnX,
                 y: spawnY,
+                renderOffsetY,
                 vx: me.facing === 'right' ? 245 : -245,
                 fxInst,
             });
@@ -965,14 +1014,22 @@ export class BattleArenaManager {
         const flipFx = attacker.facing === 'left';
         const attCenter = attacker.x + attacker.bank.width / 2;
         const defCenter = defender.x + defender.bank.width / 2;
-        const fxX = (skill.type === 'melee' || skill.type === 'leap_melee' || skill.type === 'blink_strike')
-            ? Math.round((attCenter + defCenter) / 2)
-            : Math.round(defCenter);
-        const fxY = Math.round(GROUND_Y + 26 + defender.jumpY);
+        const mainFxId = (skill.fxHit && skill.type === 'blink_strike') ? skill.fxHit : skill.fxMain;
 
-        fxFront.spawn(skill.fxHit && skill.type === 'blink_strike' ? skill.fxHit : skill.fxMain, {
+        let fxX;
+        let anchorJumpY = defender.jumpY;
+        if (CASTER_MUZZLE_FX.has(mainFxId)) {
+            fxX = Math.round(attCenter + (flipFx ? -14 : 14));
+            anchorJumpY = attacker.jumpY;
+        } else if (skill.type === 'melee' || skill.type === 'leap_melee' || skill.type === 'blink_strike') {
+            fxX = Math.round((attCenter + defCenter) / 2);
+        } else {
+            fxX = Math.round(defCenter);
+        }
+
+        fxFront.spawn(mainFxId, {
             x: fxX,
-            y: fxY,
+            y: getAlignedFxY(mainFxId, anchorJumpY),
             flip: flipFx,
         });
 
@@ -1002,7 +1059,7 @@ export class BattleArenaManager {
 
             if (p.fxInst) {
                 p.fxInst.options.x = Math.round(p.x);
-                p.fxInst.options.y = Math.round(p.y);
+                p.fxInst.options.y = Math.round(p.y + (p.renderOffsetY || 0));
             }
 
             const def = p.target;
@@ -1018,18 +1075,18 @@ export class BattleArenaManager {
                     if (!p.duckAnnounced) {
                         p.duckAnnounced = true;
                         def.crouchCounterReady = true;
-                        this._spawnFloatText?.(defCenter, GROUND_Y + 6, '⬇️ 下蹲闪避！', 'evade');
+                        this._spawnFloatText?.(defCenter, GROUND_Y + 10, '⬇️ 下蹲闪避！', 'evade');
                         announce(`⬇️ ${def.info.name} 低头下蹲，弹道擦着耳朵飞过！`);
                     }
                     continue;
                 }
 
                 // Jumping leaps cleanly over 'low' or ground projectiles!
-                if (def.jumpY < -24 && p.lane === 'low')
+                if (def.jumpY < -20 && p.lane === 'low')
                     continue;
 
-                const defBodyY = GROUND_Y + 24 + def.jumpY;
-                if (Math.abs(p.y - defBodyY) <= 30) {
+                const defBodyY = PET_BODY_Y + def.jumpY;
+                if (Math.abs(p.y - defBodyY) <= 26) {
                     if (p.fxInst)
                         fxFront.removeInstance(p.fxInst);
                     this._applyDamage(p.attacker, def, p.skill, p.lane, rng, fxFront, announce, addFreeze);
@@ -1055,8 +1112,8 @@ export class BattleArenaManager {
             defender.parryWindowSec = 0;
             defender.guardSec = 0;
             defender.rage = Math.min(100, defender.rage + 26);
-            fxFront.spawn('impacts/parry', { x: Math.round(defCenter), y: GROUND_Y + 22 });
-            this._spawnFloatText?.(defCenter, GROUND_Y - 12, '✨ 完美弹反！', 'crit');
+            fxFront.spawn('impacts/parry', { x: Math.round(defCenter), y: getAlignedFxY('impacts/parry', defender.jumpY) });
+            this._spawnFloatText?.(defCenter, GROUND_Y + 4, '✨ 完美弹反！', 'crit');
             announce(`✨ ${defender.info.name} 触发【精准弹反】震退对手！`);
 
             // Stagger close-range attackers!
@@ -1075,8 +1132,8 @@ export class BattleArenaManager {
             defender.hp = Math.max(0, defender.hp - chipDmg);
             defender.rage = Math.min(100, defender.rage + 12);
             defender.vxKnock = pushDir * 2.2;
-            fxFront.spawn('impacts/shield-block', { x: Math.round(defCenter), y: GROUND_Y + 24 });
-            this._spawnFloatText?.(defCenter, GROUND_Y - 6, `🛡️ 格挡 -${chipDmg}`, 'guard');
+            fxFront.spawn('impacts/shield-block', { x: Math.round(defCenter), y: getAlignedFxY('impacts/shield-block', defender.jumpY), flip: defender.facing === 'left' });
+            this._spawnFloatText?.(defCenter, GROUND_Y + 8, `🛡️ 格挡 -${chipDmg}`, 'guard');
             attacker.comboHitsLanded += 1;
             addFreeze(35);
             return;
@@ -1089,7 +1146,7 @@ export class BattleArenaManager {
 
         if (defender.shieldSec > 0) {
             rawDmg *= 0.55;
-            fxFront.spawn('impacts/shield-block', { x: Math.round(defCenter), y: GROUND_Y + 24 });
+            fxFront.spawn('impacts/shield-block', { x: Math.round(defCenter), y: getAlignedFxY('impacts/shield-block', defender.jumpY), flip: defender.facing === 'left' });
         }
 
         const dmg = Math.max(4, Math.round(rawDmg));
@@ -1113,7 +1170,7 @@ export class BattleArenaManager {
         if (skill.fxHit) {
             fxFront.spawn(skill.fxHit, {
                 x: Math.round(defCenter),
-                y: Math.round(GROUND_Y + 22 + defender.jumpY),
+                y: getAlignedFxY(skill.fxHit, defender.jumpY),
                 flip: pushDir < 0,
             });
         }

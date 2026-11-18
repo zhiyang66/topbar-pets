@@ -26,7 +26,7 @@ if uuid not in cur:
 print("Registered in enabled-extensions:", uuid)
 PY
 
-# Try enabling or reloading live via GNOME Shell D-Bus
+# Enable if already scanned in current GNOME session (note: updating already-loaded ESM files requires re-login on Wayland)
 if gdbus call --session \
   --dest org.gnome.Shell.Extensions \
   --object-path /org/gnome/Shell/Extensions \
@@ -34,12 +34,8 @@ if gdbus call --session \
   gdbus call --session \
     --dest org.gnome.Shell.Extensions \
     --object-path /org/gnome/Shell/Extensions \
-    --method org.gnome.Shell.Extensions.ReloadExtension "$UUID" >/dev/null 2>&1 || true
-  gdbus call --session \
-    --dest org.gnome.Shell.Extensions \
-    --object-path /org/gnome/Shell/Extensions \
     --method org.gnome.Shell.Extensions.EnableExtension "$UUID" >/dev/null 2>&1 || true
-  echo "Extension hot-loaded in current GNOME session!"
+  echo "Extension files updated in ~/.local/share/gnome-shell/extensions/$UUID (re-login on Wayland to reload cached ES modules, or run ./scripts/dev-preview.sh to preview immediately)."
 else
   echo "Installed to ~/.local/share/gnome-shell/extensions/$UUID"
   echo "Note: On Wayland, first-time local extension installation requires logging out & back in once (or run ./scripts/dev-preview.sh to preview immediately in a window!)."
