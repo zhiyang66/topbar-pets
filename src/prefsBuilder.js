@@ -5,7 +5,6 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
 
 import {
-    MAX_ADOPTED_PETS,
     SPECIES_PRESETS,
     CLASS_ARCHETYPES,
     createNewPetRecord,
@@ -23,7 +22,7 @@ function readRosterState(settings) {
         if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed.pets) && parsed.pets.length > 0) {
-                const pets = parsed.pets.slice(0, MAX_ADOPTED_PETS).map(p => createNewPetRecord(p));
+                const pets = parsed.pets.map(p => createNewPetRecord(p));
                 let primaryPetId = parsed.primaryPetId || pets[0].id;
                 if (!pets.some(p => p.id === primaryPetId))
                     primaryPetId = pets[0].id;
@@ -102,12 +101,29 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
     window.set_search_enabled(true);
 
     // =========================================================================
-    // TAB 1: 🐾 宠物小队管理与领养 / 放生 (最多 3 只)
+    // TAB 1: 🐾 宠物小队管理与领养 / 放生 (不限数量 + 独立出场开关)
     // =========================================================================
     const pageSquad = new Adw.PreferencesPage({
         title: '宠物小队与领养',
         icon_name: 'emblem-favorite-symbolic',
     });
+
+    const masterVisGroup = new Adw.PreferencesGroup({
+        title: '🐾 宠物显示与漫游快捷总控',
+    });
+    masterVisGroup.add(createSwitchRow({
+        title: '显示桌面宠物 (总开关)',
+        subtitle: '关闭后立即隐藏屏幕上所有宠物（含局域网访客），专注工作时可一键静默，随时重新开启',
+        settings,
+        key: 'pets-visible',
+    }));
+    masterVisGroup.add(createSwitchRow({
+        title: '允许移动到屏幕任意区域 (全屏非破坏性互动)',
+        subtitle: '开启后宠物可跳伞、乘气球、攀爬边框并在软件窗口标题栏驻足散步',
+        settings,
+        key: 'free-roam-enabled',
+    }));
+    pageSquad.add(masterVisGroup);
 
     let rosterGroup = null;
     let adoptGroup = null;
@@ -130,22 +146,75 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
             pageSquad.remove(adoptGroup);
 
         const state = readRosterState(settings);
+        const activeCount = state.pets.filter(p => p.onTopBar !== false).length;
 
         rosterGroup = new Adw.PreferencesGroup({
-            title: `我的已领养宠物 (${state.pets.length} / ${MAX_ADOPTED_PETS})`,
-            description: '最多可同时领养 3 只宠物！所有出战宠物会在顶部栏自由散步、与系统图标互动耍宝、与同伴击掌/跳山羊/切磋；标有 👑 的主战宠物将代表你参加局域网同屏与擂台决斗。',
+            title: `我的已领养宠物 (当前出场 ${activeCount} / 共 ${state.pets.length} 只 · 不限领养上限)`,
+            description: '每只宠物右侧均配有独立的「是否出现」开关！开启后即可在屏幕上散步互动；标有 👑 的主战宠物将代表你参加局域网同屏与擂台决斗。',
         });
+
+        if (state.pets.length >= 2) {
+            const batchRow = new Adw.ActionRow({
+                title: '小队出场批量控制',
+                subtitle: '宠物较多时，可一键让所有伙伴同时登场，或仅保留主战代表出场',
+            });
+            const batchBox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL, spacing: 8, valign: Gtk.Align.CENTER });
+            const showAllBtn = new Gtk.Button({ label: '✨ 全部出场' });
+            const onlyMainBtn = new Gtk.Button({ label: '👑 仅主战出场' });
+            const hideAllBtn = new Gtk.Button({ label: '🙈 全部休息' });
+
+            showAllBtn.connect('clicked', () => {
+                const st = readRosterState(settings);
+                for (const p of st.pets)
+                    p.onTopBar = true;
+                writeRosterState(settings, st);
+                if (!settings.get_boolean('pets-visible'))
+                    settings.set_boolean('pets-visible', true);
+                rebuildSquadPage();
+            });
+            onlyMainBtn.connect('clicked', () => {
+                const st = readRosterState(settings);
+                for (const p of st.pets)
+                    p.onTopBar = (p.id === st.primaryPetId);
+                writeRosterState(settings, st);
+                if (!settings.get_boolean('pets-visible'))
+                    settings.set_boolean('pets-visible', true);
+                rebuildSquadPage();
+            });
+            hideAllBtn.connect('clicked', () => {
+                const st = readRosterState(settings);
+                for (const p of st.pets)
+                    p.onTopBar = false;
+                writeRosterState(settings, st);
+                rebuildSquadPage();
+            });
+
+            batchBox.append(showAllBtn);
+            batchBox.append(onlyMainBtn);
+            batchBox.append(hideAllBtn);
+            batchRow.add_suffix(batchBox);
+            rosterGroup.add(batchRow);
+        }
 
         state.pets.forEach((pet, idx) => {
             const isPrimary = pet.id === state.primaryPetId;
             const arch = getArchetype(pet.archetype);
             const nextXp = xpRequiredForLevel(pet.level);
+            const isShown = pet.onTopBar !== false;
 
             const expRow = new Adw.ExpanderRow({
                 title: `${isPrimary ? '👑 ' : '🐾 '}${pet.name}  ·  Lv.${pet.level}  [${arch.badge}]`,
-                subtitle: `经验 ${pet.xp}/${nextXp}  ·  战绩 ${pet.wins}胜 ${pet.losses}负  ·  ${pet.skinMode === 'preset' ? '内置高清像素模型' : '自定义素材'}`,
+                subtitle: `${isShown ? '🟢 已出场显示' : '⚪ 休息隐藏中'}  ·  经验 ${pet.xp}/${nextXp}  ·  战绩 ${pet.wins}胜 ${pet.losses}负`,
                 expanded: idx === 0 && state.pets.length === 1,
             });
+
+            // Quick inline visibility switch right on the header row!
+            const quickVisSwitch = new Gtk.Switch({
+                active: isShown,
+                valign: Gtk.Align.CENTER,
+                tooltip_text: '是否让这只宠物出现在屏幕上',
+            });
+            expRow.add_suffix(quickVisSwitch);
 
             // 1. Rename
             const nameEntry = new Adw.EntryRow({
@@ -186,21 +255,34 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
             });
             expRow.add_row(archCombo);
 
-            // 3. Roam on Top Bar Switch
+            // 3. Per-Pet Appearance Switch (synced with header quickVisSwitch)
             const roamSwitch = new Adw.SwitchRow({
-                title: '在顶部栏出战漫步',
-                subtitle: isPrimary ? '主战宠物始终在顶部栏活跃' : '开启后与其它伙伴同屏互动（击掌、跳山羊、同步舞、过招等）',
-                active: pet.onTopBar !== false,
-                sensitive: !isPrimary,
+                title: '让该宠物出现在屏幕上 (出场漫步)',
+                subtitle: '关闭后该宠物暂时收回休息，等级与属性完整保留',
+                active: isShown,
             });
-            roamSwitch.connect('notify::active', () => {
+            let syncingVis = false;
+            const applyPetVis = nextActive => {
+                if (syncingVis)
+                    return;
+                syncingVis = true;
+                quickVisSwitch.set_active(nextActive);
+                roamSwitch.set_active(nextActive);
                 const st = readRosterState(settings);
                 const target = st.pets.find(p => p.id === pet.id);
                 if (target) {
-                    target.onTopBar = roamSwitch.get_active();
+                    target.onTopBar = nextActive;
                     writeRosterState(settings, st);
                 }
-            });
+                if (nextActive && !settings.get_boolean('pets-visible'))
+                    settings.set_boolean('pets-visible', true);
+                expRow.set_subtitle(`${nextActive ? '🟢 已出场显示' : '⚪ 休息隐藏中'}  ·  经验 ${pet.xp}/${nextXp}  ·  战绩 ${pet.wins}胜 ${pet.losses}负`);
+                const nextActiveCount = (readRosterState(settings).pets || []).filter(p => p.onTopBar !== false).length;
+                rosterGroup.set_title(`我的已领养宠物 (当前出场 ${nextActiveCount} / 共 ${state.pets.length} 只 · 不限领养上限)`);
+                syncingVis = false;
+            };
+            quickVisSwitch.connect('notify::active', () => applyPetVis(quickVisSwitch.get_active()));
+            roamSwitch.connect('notify::active', () => applyPetVis(roamSwitch.get_active()));
             expRow.add_row(roamSwitch);
 
             // 4. Quick Skin Changer for this Pet
@@ -318,148 +400,140 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
 
         pageSquad.add(rosterGroup);
 
-        // Adopt New Pet Panel (when < 3 pets!)
-        if (state.pets.length < MAX_ADOPTED_PETS) {
-            adoptGroup = new Adw.PreferencesGroup({
-                title: `➕ 领养新宠物 (还可领养 ${MAX_ADOPTED_PETS - state.pets.length} 只)`,
-                description: '可领养内置 6 款萌宠，也可直接导入你在「✨ AI 提示词工坊」生成的自定义精灵图或 GIF！',
-            });
+        // Adopt New Pet Panel (Unlimited Pets!)
+        adoptGroup = new Adw.PreferencesGroup({
+            title: '➕ 领养新宠物 (不限数量)',
+            description: '可无限领养内置 6 款萌宠，也可直接导入你在「✨ AI 提示词工坊」生成的自定义精灵图或 GIF！',
+        });
 
-            const newNameRow = new Adw.EntryRow({
-                title: '新宠物昵称',
-                text: adoptDraft.name,
-            });
-            newNameRow.connect('changed', () => {
-                adoptDraft.name = newNameRow.get_text();
-            });
-            adoptGroup.add(newNameRow);
+        const newNameRow = new Adw.EntryRow({
+            title: '新宠物昵称',
+            text: adoptDraft.name,
+        });
+        newNameRow.connect('changed', () => {
+            adoptDraft.name = newNameRow.get_text();
+        });
+        adoptGroup.add(newNameRow);
 
-            const newArchCombo = new Adw.ComboRow({
-                title: '选择职业流派',
-                model: Gtk.StringList.new(ARCHETYPE_LIST.map(a => `${a.badge} ${a.name} (${a.desc.slice(0, 20)}…)`)),
-            });
-            newArchCombo.set_selected(adoptDraft.archetypeIdx);
-            newArchCombo.connect('notify::selected', () => {
-                adoptDraft.archetypeIdx = newArchCombo.get_selected();
-            });
-            adoptGroup.add(newArchCombo);
+        const newArchCombo = new Adw.ComboRow({
+            title: '选择职业流派',
+            model: Gtk.StringList.new(ARCHETYPE_LIST.map(a => `${a.badge} ${a.name} (${a.desc.slice(0, 20)}…)`)),
+        });
+        newArchCombo.set_selected(adoptDraft.archetypeIdx);
+        newArchCombo.connect('notify::selected', () => {
+            adoptDraft.archetypeIdx = newArchCombo.get_selected();
+        });
+        adoptGroup.add(newArchCombo);
 
-            const newModeCombo = new Adw.ComboRow({
-                title: '外观类型',
-                model: Gtk.StringList.new([
-                    '内置高清像素角色 (6 款可选)',
-                    'AI 生成 / 自定义精灵图 (自动去白底/绿幕抠图)',
-                    '自定义 GIF 动图',
-                ]),
-            });
-            newModeCombo.set_selected(adoptDraft.skinModeIdx);
-            adoptGroup.add(newModeCombo);
+        const newModeCombo = new Adw.ComboRow({
+            title: '外观类型',
+            model: Gtk.StringList.new([
+                '内置高清像素角色 (6 款可选)',
+                'AI 生成 / 自定义精灵图 (自动去白底/绿幕抠图)',
+                '自定义 GIF 动图',
+            ]),
+        });
+        newModeCombo.set_selected(adoptDraft.skinModeIdx);
+        adoptGroup.add(newModeCombo);
 
-            const newPresetCombo = new Adw.ComboRow({
-                title: '内置角色选择',
-                model: Gtk.StringList.new(SPECIES_PRESETS.map(s => s.label)),
-                visible: adoptDraft.skinModeIdx === 0,
-            });
-            newPresetCombo.set_selected(adoptDraft.presetIdx);
-            newPresetCombo.connect('notify::selected', () => {
-                adoptDraft.presetIdx = newPresetCombo.get_selected();
-                const sp = SPECIES_PRESETS[adoptDraft.presetIdx];
-                if (sp && (!adoptDraft.name || adoptDraft.name === '新伙伴')) {
-                    adoptDraft.name = sp.defaultName;
-                    newNameRow.set_text(sp.defaultName);
-                }
-            });
-            adoptGroup.add(newPresetCombo);
+        const newPresetCombo = new Adw.ComboRow({
+            title: '内置角色选择',
+            model: Gtk.StringList.new(SPECIES_PRESETS.map(s => s.label)),
+            visible: adoptDraft.skinModeIdx === 0,
+        });
+        newPresetCombo.set_selected(adoptDraft.presetIdx);
+        newPresetCombo.connect('notify::selected', () => {
+            adoptDraft.presetIdx = newPresetCombo.get_selected();
+            const sp = SPECIES_PRESETS[adoptDraft.presetIdx];
+            if (sp && (!adoptDraft.name || adoptDraft.name === '新伙伴')) {
+                adoptDraft.name = sp.defaultName;
+                newNameRow.set_text(sp.defaultName);
+            }
+        });
+        adoptGroup.add(newPresetCombo);
 
-            const fileRow = new Adw.ActionRow({
-                title: '自定义图片文件',
-                subtitle: adoptDraft.customPath || '尚未选择文件（点击右侧按钮浏览 PNG / GIF）',
-                visible: adoptDraft.skinModeIdx !== 0,
+        const fileRow = new Adw.ActionRow({
+            title: '自定义图片文件',
+            subtitle: adoptDraft.customPath || '尚未选择文件（点击右侧按钮浏览 PNG / GIF）',
+            visible: adoptDraft.skinModeIdx !== 0,
+        });
+        const pickBtn = new Gtk.Button({ label: '浏览文件…', valign: Gtk.Align.CENTER });
+        pickBtn.connect('clicked', () => {
+            openImageFileDialog(window, '选择自定义精灵图或 GIF', path => {
+                adoptDraft.customPath = path;
+                fileRow.set_subtitle(path);
             });
-            const pickBtn = new Gtk.Button({ label: '浏览文件…', valign: Gtk.Align.CENTER });
-            pickBtn.connect('clicked', () => {
-                openImageFileDialog(window, '选择自定义精灵图或 GIF', path => {
-                    adoptDraft.customPath = path;
-                    fileRow.set_subtitle(path);
-                });
-            });
-            fileRow.add_suffix(pickBtn);
-            adoptGroup.add(fileRow);
+        });
+        fileRow.add_suffix(pickBtn);
+        adoptGroup.add(fileRow);
 
-            const colsRow = new Adw.SpinRow({
-                title: '精灵图每行帧数 (Columns)',
-                adjustment: new Gtk.Adjustment({ lower: 1, upper: 32, step_increment: 1, value: adoptDraft.cols }),
-                visible: adoptDraft.skinModeIdx === 1,
-            });
-            colsRow.connect('notify::value', () => { adoptDraft.cols = Math.round(colsRow.get_value()); });
-            adoptGroup.add(colsRow);
+        const colsRow = new Adw.SpinRow({
+            title: '精灵图每行帧数 (Columns)',
+            adjustment: new Gtk.Adjustment({ lower: 1, upper: 32, step_increment: 1, value: adoptDraft.cols }),
+            visible: adoptDraft.skinModeIdx === 1,
+        });
+        colsRow.connect('notify::value', () => { adoptDraft.cols = Math.round(colsRow.get_value()); });
+        adoptGroup.add(colsRow);
 
-            const rowsRow = new Adw.SpinRow({
-                title: '精灵图总行数 (AI 提示词标准为 10 行)',
-                adjustment: new Gtk.Adjustment({ lower: 1, upper: 32, step_increment: 1, value: adoptDraft.rows }),
-                visible: adoptDraft.skinModeIdx === 1,
-            });
-            rowsRow.connect('notify::value', () => { adoptDraft.rows = Math.round(rowsRow.get_value()); });
-            adoptGroup.add(rowsRow);
+        const rowsRow = new Adw.SpinRow({
+            title: '精灵图总行数 (AI 提示词标准为 10 行)',
+            adjustment: new Gtk.Adjustment({ lower: 1, upper: 32, step_increment: 1, value: adoptDraft.rows }),
+            visible: adoptDraft.skinModeIdx === 1,
+        });
+        rowsRow.connect('notify::value', () => { adoptDraft.rows = Math.round(rowsRow.get_value()); });
+        adoptGroup.add(rowsRow);
 
-            const autoBgRow = new Adw.SwitchRow({
-                title: '智能抠除纯色背景 (AI 生成白底/绿幕一键变透明)',
-                active: adoptDraft.autoRemoveBg,
-                visible: adoptDraft.skinModeIdx !== 0,
-            });
-            autoBgRow.connect('notify::active', () => { adoptDraft.autoRemoveBg = autoBgRow.get_active(); });
-            adoptGroup.add(autoBgRow);
+        const autoBgRow = new Adw.SwitchRow({
+            title: '智能抠除纯色背景 (AI 生成白底/绿幕一键变透明)',
+            active: adoptDraft.autoRemoveBg,
+            visible: adoptDraft.skinModeIdx !== 0,
+        });
+        autoBgRow.connect('notify::active', () => { adoptDraft.autoRemoveBg = autoBgRow.get_active(); });
+        adoptGroup.add(autoBgRow);
 
-            newModeCombo.connect('notify::selected', () => {
-                adoptDraft.skinModeIdx = newModeCombo.get_selected();
-                newPresetCombo.set_visible(adoptDraft.skinModeIdx === 0);
-                fileRow.set_visible(adoptDraft.skinModeIdx !== 0);
-                colsRow.set_visible(adoptDraft.skinModeIdx === 1);
-                rowsRow.set_visible(adoptDraft.skinModeIdx === 1);
-                autoBgRow.set_visible(adoptDraft.skinModeIdx !== 0);
-            });
+        newModeCombo.connect('notify::selected', () => {
+            adoptDraft.skinModeIdx = newModeCombo.get_selected();
+            newPresetCombo.set_visible(adoptDraft.skinModeIdx === 0);
+            fileRow.set_visible(adoptDraft.skinModeIdx !== 0);
+            colsRow.set_visible(adoptDraft.skinModeIdx === 1);
+            rowsRow.set_visible(adoptDraft.skinModeIdx === 1);
+            autoBgRow.set_visible(adoptDraft.skinModeIdx !== 0);
+        });
 
-            const submitRow = new Adw.ActionRow({
-                title: '完成配置，迎接新伙伴！',
+        const submitRow = new Adw.ActionRow({
+            title: '完成配置，迎接新伙伴！',
+        });
+        const adoptBtn = new Gtk.Button({
+            label: '🎉 立即领养',
+            css_classes: ['suggested-action'],
+            valign: Gtk.Align.CENTER,
+        });
+        adoptBtn.connect('clicked', () => {
+            const st = readRosterState(settings);
+            const arch = ARCHETYPE_LIST[adoptDraft.archetypeIdx] || ARCHETYPE_LIST[0];
+            const sp = SPECIES_PRESETS[adoptDraft.presetIdx] || SPECIES_PRESETS[0];
+            const modeMap = ['preset', 'spritesheet', 'gif'];
+            const newPet = createNewPetRecord({
+                name: (adoptDraft.name || sp.defaultName).trim(),
+                archetype: arch.id,
+                skinMode: modeMap[adoptDraft.skinModeIdx] || 'preset',
+                presetId: sp.id,
+                customPath: adoptDraft.customPath,
+                cols: adoptDraft.cols,
+                rows: adoptDraft.rows,
+                autoRemoveBg: adoptDraft.autoRemoveBg,
             });
-            const adoptBtn = new Gtk.Button({
-                label: '🎉 立即领养',
-                css_classes: ['suggested-action'],
-                valign: Gtk.Align.CENTER,
-            });
-            adoptBtn.connect('clicked', () => {
-                const st = readRosterState(settings);
-                if (st.pets.length >= MAX_ADOPTED_PETS)
-                    return;
-                const arch = ARCHETYPE_LIST[adoptDraft.archetypeIdx] || ARCHETYPE_LIST[0];
-                const sp = SPECIES_PRESETS[adoptDraft.presetIdx] || SPECIES_PRESETS[0];
-                const modeMap = ['preset', 'spritesheet', 'gif'];
-                const newPet = createNewPetRecord({
-                    name: (adoptDraft.name || sp.defaultName).trim(),
-                    archetype: arch.id,
-                    skinMode: modeMap[adoptDraft.skinModeIdx] || 'preset',
-                    presetId: sp.id,
-                    customPath: adoptDraft.customPath,
-                    cols: adoptDraft.cols,
-                    rows: adoptDraft.rows,
-                    autoRemoveBg: adoptDraft.autoRemoveBg,
-                });
-                st.pets.push(newPet);
-                writeRosterState(settings, st);
-                adoptDraft.name = '新伙伴';
-                rebuildSquadPage();
-            });
-            submitRow.add_suffix(adoptBtn);
-            adoptGroup.add(submitRow);
+            st.pets.push(newPet);
+            writeRosterState(settings, st);
+            if (!settings.get_boolean('pets-visible'))
+                settings.set_boolean('pets-visible', true);
+            adoptDraft.name = '新伙伴';
+            rebuildSquadPage();
+        });
+        submitRow.add_suffix(adoptBtn);
+        adoptGroup.add(submitRow);
 
-            pageSquad.add(adoptGroup);
-        } else {
-            adoptGroup = new Adw.PreferencesGroup({
-                title: '宠物小队已满员 (3 / 3)',
-                description: '你已领养满 3 只宠物！若想领养新角色，可先在上方展开某只宠物点击「🍃 放生宠物」。',
-            });
-            pageSquad.add(adoptGroup);
-        }
+        pageSquad.add(adoptGroup);
     };
 
     rebuildSquadPage();
@@ -609,8 +683,20 @@ export function populatePreferencesWindow(window, settings, extensionPath = '') 
     pageNet.add(lanGroup);
 
     const dispGroup = new Adw.PreferencesGroup({
-        title: '顶部栏显示与操控调整',
+        title: '顶部栏与全屏漫游控制',
     });
+    dispGroup.add(createSwitchRow({
+        title: '显示桌面宠物 (总开关)',
+        subtitle: '控制屏幕上是否显示宠物（关闭后仍保留右上角菜单图标以便随时唤出）',
+        settings,
+        key: 'pets-visible',
+    }));
+    dispGroup.add(createSwitchRow({
+        title: '允许移动到屏幕任意区域 (全屏非破坏性互动)',
+        subtitle: '开启后宠物可跳伞、乘气球、攀爬屏幕边框、在打开的窗口标题栏驻足跟随，并与局域网伙伴同步 2D 位置（纯视觉零遮挡输入）',
+        settings,
+        key: 'free-roam-enabled',
+    }));
     dispGroup.add(createSpinRow({ title: '宠物高度尺寸 (px)', subtitle: '支持滚轮实时缩放', settings, key: 'pet-size', min: 18, max: 64, step: 2 }));
     dispGroup.add(createSpinRow({ title: '移动速度倍率', settings, key: 'walk-speed', min: 0.3, max: 3.0, step: 0.1, digits: 1 }));
     dispGroup.add(createSpinRow({ title: '垂直偏移微调 (px)', settings, key: 'vertical-offset', min: -20, max: 24 }));

@@ -49,6 +49,16 @@
     </key>
 
     <!-- Essential Usability Controls -->
+    <key name="pets-visible" type="b">
+      <default>true</default>
+      <summary>Master Switch to Show or Hide Pets on Screen</summary>
+    </key>
+
+    <key name="free-roam-enabled" type="b">
+      <default>false</default>
+      <summary>Allow Pets to Roam Across the Entire Screen &amp; Window Ledges Non-Destructively</summary>
+    </key>
+
     <key name="click-through" type="b">
       <default>false</default>
       <summary>Click-Through (Ghost) Mode</summary>

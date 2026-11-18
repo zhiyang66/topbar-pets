@@ -27,10 +27,11 @@ const DUO_KINDS = [
  * and Arena entrance/exit choreography!
  */
 class RemotePetActor {
-    constructor({ extensionPath, settings, peerInfo, lanManager, effects, onChallengePeer }) {
+    constructor({ extensionPath, settings, peerInfo, perception, lanManager, effects, onChallengePeer }) {
         this._extensionPath = extensionPath;
         this._settings = settings;
         this.peer = peerInfo;
+        this._perception = perception;
         this._lanManager = lanManager;
         this._effects = effects;
         this._onChallengePeer = onChallengePeer;
@@ -38,9 +39,11 @@ class RemotePetActor {
         this._bank = null;
         this._petW = 32;
         this._petH = 32;
-        this._curX = 300;
+        this._curX = Number.NaN;
         this._targetX = 300;
-        this._y = 0;
+        this._curY = Number.NaN;
+        this._targetY = 0;
+        this._topGroundY = 0;
         this._jumpY = 0;
         this._vy = 0;
         this._frameIdx = 0;
@@ -74,6 +77,9 @@ class RemotePetActor {
             reactive: false,
             opacity: 215,
         });
+        this._badge.connect('destroy', () => {
+            this._badge = null;
+        });
         addChromeActor(this._badge, { interactive: false, trackFullscreen: true });
 
         this._menu = new PopupMenu.PopupMenu(this._actor, 0.5, St.Side.TOP);
@@ -100,17 +106,31 @@ class RemotePetActor {
 
         this._settingsSignals = [
             this._settings.connect('changed::pet-size', () => this.reloadSkin()),
+            this._settings.connect('changed::pixel-art-scaling', () => this.reloadSkin()),
+            this._settings.connect('changed::free-roam-enabled', () => this.updateFromBeacon(this.peer, false)),
+            this._settings.connect('changed::pets-visible', () => this._syncMasterVisibility()),
             this._settings.connect('changed::click-through', () => {
                 if (!this._actor)
                     return;
                 const ct = this._settings.get_boolean('click-through');
                 removeChromeActor(this._actor);
+                this._actor.reactive = !ct;
+                this._actor.track_hover = !ct;
                 addChromeActor(this._actor, { interactive: !ct, trackFullscreen: true });
             }),
         ];
 
         this.reloadSkin();
         this.updateFromBeacon(peerInfo, true);
+        this._syncMasterVisibility();
+    }
+
+    _syncMasterVisibility() {
+        const masterVis = this._settings.get_boolean('pets-visible');
+        if (this._actor && !this._inArenaBattle)
+            this._actor.visible = masterVis;
+        if (this._badge && !this._inArenaBattle)
+            this._badge.visible = masterVis;
     }
 
     destroy() {
@@ -149,7 +169,7 @@ class RemotePetActor {
         if (!this._actor || !this._actor.visible)
             return;
         this._effects.showBubble(
-            () => ({ x: this._curX, y: this._y + this._jumpY, width: this._petW, height: this._petH }),
+            () => ({ x: this._curX, y: this._curY + this._jumpY, width: this._petW, height: this._petH }),
             text,
             durationMs,
             `peer-${this.peer.peerId}`
@@ -170,6 +190,10 @@ class RemotePetActor {
         this._arenaEnterMs = 0;
         this._arenaTargetX = targetX;
         this._onArenaArrived = onArrived;
+        if (!Number.isFinite(this._curX))
+            this._curX = targetX;
+        if (!Number.isFinite(this._curY))
+            this._curY = this._topGroundY;
         this._actor.set_scale(1.0, 1.0);
         this._actor.rotation_angle_z = 0;
 
@@ -177,7 +201,7 @@ class RemotePetActor {
             this._badge.visible = false;
 
         this.say(customLine || `${this.peer.petName}：应战！我来也 ⚔️🔥`, 1500);
-        this._effects.spawnParticle(this._curX + this._petW / 2, this._y, '🔥', 18);
+        this._effects.spawnParticle(this._curX + this._petW / 2, this._curY, '🔥', 18);
         this._vy = -3.8;
         this._jumpY = -1;
     }
@@ -192,22 +216,35 @@ class RemotePetActor {
 
         if (!this._actor)
             return;
+        const masterVis = this._settings.get_boolean('pets-visible');
         this._actor.remove_all_transitions();
-        this._actor.visible = true;
+        this._actor.visible = masterVis;
         this._actor.opacity = 0;
         this._actor.set_scale(1.0, 1.0);
         this._actor.rotation_angle_z = 0;
+        this._curY = this._topGroundY;
         this._jumpY = 18;
         this._vy = -5.6;
-        if (this._badge)
-            this._badge.visible = true;
+        this._actor.set_position(Math.round(this._curX), Math.round(this._curY + this._jumpY));
+        if (this._badge) {
+            const [, bw] = this._badge.get_preferred_width(-1);
+            const panelBox = Main.layoutManager.panelBox;
+            const panelBottom = (panelBox?.y ?? 0) + (panelBox?.height ?? 32);
+            this._badge.set_position(
+                Math.round(this._curX + this._petW / 2 - bw / 2),
+                Math.round(panelBottom + 2)
+            );
+            this._badge.visible = masterVis;
+        }
+        if (!masterVis)
+            return;
 
         this._actor.ease({
             opacity: 235,
             duration: 260,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
-        this._effects.spawnParticle(this._curX + this._petW / 2, this._y, '✨', 16);
+        this._effects.spawnParticle(this._curX + this._petW / 2, this._curY, '✨', 16);
     }
 
     triggerSocialReaction(socialKind, otherX) {
@@ -253,33 +290,39 @@ class RemotePetActor {
         });
         this._menu.addAction('👋 挥爪打招呼', () => {
             this._lanManager.sendGreeting(this.peer.peerId);
-            this._effects.spawnBurst(this._curX + this._petW / 2, this._y, ['👋', '✨', '❤️'], 3);
+            this._effects.spawnBurst(this._curX + this._petW / 2, this._curY, ['👋', '✨', '❤️'], 3);
         });
     }
 
     updateFromBeacon(peerInfo, snapImmediate = false) {
         this.peer = peerInfo;
-        const panelBox = Main.layoutManager?.panelBox;
-        if (!panelBox || !Number.isFinite(panelBox.width) || panelBox.width <= 64)
-            return;
-        const px = Number.isFinite(panelBox.x) ? panelBox.x : 0;
-        const py = Number.isFinite(panelBox.y) ? panelBox.y : 0;
-        const pw = panelBox.width;
-        const ph = (Number.isFinite(panelBox.height) && panelBox.height > 12) ? panelBox.height : 32;
         const vOffset = this._settings.get_int('vertical-offset');
+        const bounds = this._perception?.getScreenRoamBounds?.(this._petW, this._petH, vOffset);
+        if (!bounds)
+            return;
 
-        const minX = px + 8;
-        const maxX = Math.max(minX + 16, px + pw - this._petW - 8);
+        this._topGroundY = bounds.groundY;
+        const minX = bounds.minX;
+        const maxX = bounds.maxX;
         this._targetX = minX + (Number(peerInfo.normX) || 0.5) * (maxX - minX);
-        if (snapImmediate || !Number.isFinite(this._curX))
+
+        // Respect local user's free-roam switch: only roam into screen space when local user also enabled it!
+        const localFreeRoam = this._settings.get_boolean('free-roam-enabled');
+        const peerNormY = (localFreeRoam && peerInfo.freeRoam) ? Math.max(0, Math.min(1, Number(peerInfo.normY) || 0)) : 0;
+        this._targetY = bounds.groundY + peerNormY * Math.max(0, bounds.bottomGroundY - bounds.groundY);
+
+        if (snapImmediate || !Number.isFinite(this._curX) || !Number.isFinite(this._curY)) {
             this._curX = this._targetX;
-        this._y = Math.max(0, py + ph - this._petH + vOffset);
+            this._curY = this._targetY;
+        }
 
         if (this._badge)
             this._badge.text = `🌐 ${peerInfo.ownerName}·${peerInfo.petName} Lv.${peerInfo.level}`;
     }
 
     tick(dtMs) {
+        if (this._actor && (!Number.isFinite(this._curX) || !Number.isFinite(this._curY)))
+            return;
         if (!this._actor || !this._bank)
             return;
 
@@ -295,22 +338,25 @@ class RemotePetActor {
             }
         }
 
-        // Pre-battle sprint to Top-Center + downward dive into Arena!
+        // Pre-battle 2D sprint to Top-Center + downward dive into Arena!
         if (this._arenaEntering) {
             if (this._arenaDiveStarted)
                 return;
             this._arenaEnterMs += dtMs;
             const dx = this._arenaTargetX - this._curX;
-            const step = Math.max(10.5, Math.abs(dx) * 0.16);
+            const dy = this._topGroundY - this._curY;
+            const stepX = Math.max(10.5, Math.abs(dx) * 0.16);
+            const stepY = Math.max(11.0, Math.abs(dy) * 0.17);
 
-            if (Math.abs(dx) <= 14 || this._arenaEnterMs >= 950) {
+            if ((Math.abs(dx) <= 14 && Math.abs(dy) <= 14) || this._arenaEnterMs >= 950) {
                 this._arenaDiveStarted = true;
                 this._arenaEntering = false;
                 this._curX = this._arenaTargetX;
-                this._actor.set_position(Math.round(this._curX), Math.round(this._y));
-                this._effects.spawnParticle(this._curX + this._petW / 2, this._y + 4, '💨', 14);
+                this._curY = this._topGroundY;
+                this._actor.set_position(Math.round(this._curX), Math.round(this._curY));
+                this._effects.spawnParticle(this._curX + this._petW / 2, this._curY + 4, '💨', 14);
                 this._actor.ease({
-                    y: Math.round(this._y + 34),
+                    y: Math.round(this._curY + 34),
                     opacity: 0,
                     duration: 270,
                     mode: Clutter.AnimationMode.EASE_IN_BACK,
@@ -325,8 +371,9 @@ class RemotePetActor {
                 return;
             }
 
-            const facing = dx > 0 ? 'right' : 'left';
-            this._curX += dx > 0 ? Math.min(dx, step) : Math.max(dx, -step);
+            const facing = dx >= 0 ? 'right' : 'left';
+            this._curX += dx > 0 ? Math.min(dx, stepX) : Math.max(dx, -stepX);
+            this._curY += dy > 0 ? Math.min(dy, stepY) : Math.max(dy, -stepY);
             const runFrames = this._bank.states.run || this._bank.states.walk || this._bank.states.idle;
             if (runFrames?.length) {
                 this._frameAccMs += dtMs;
@@ -337,11 +384,11 @@ class RemotePetActor {
                 const f = runFrames[this._frameIdx % runFrames.length];
                 this._actor.set_content(facing === 'left' ? f.left : f.right);
             }
-            this._actor.set_position(Math.round(this._curX), Math.round(this._y + this._jumpY));
+            this._actor.set_position(Math.round(this._curX), Math.round(this._curY + this._jumpY));
             return;
         }
 
-        // Normal LAN interpolation & local social reaction flair
+        // Normal 2D LAN interpolation & local social reaction flair
         let stateOverride = null;
         if (this._socialTimerMs > 0) {
             this._socialTimerMs -= dtMs;
@@ -367,6 +414,7 @@ class RemotePetActor {
             }
         } else {
             this._curX += (this._targetX - this._curX) * 0.14;
+            this._curY += (this._targetY - this._curY) * 0.14;
         }
 
         const rawState = stateOverride || this.peer.state;
@@ -386,20 +434,27 @@ class RemotePetActor {
         }
 
         const rx = Math.round(this._curX);
-        const ry = Math.round(this._y + this._jumpY);
+        const ry = Math.round(this._curY + this._jumpY);
         this._actor.set_position(rx, ry);
 
         if (this._badge && this._badge.visible) {
             const [, bw] = this._badge.get_preferred_width(-1);
-            const bx = Math.round(rx + this._petW / 2 - bw / 2);
             const panelBox = Main.layoutManager.panelBox;
-            const by = (panelBox?.y ?? 0) + (panelBox?.height ?? 32) + 2;
+            const panelBottom = (panelBox?.y ?? 0) + (panelBox?.height ?? 32);
+            const bx = Math.round(rx + this._petW / 2 - bw / 2);
+            const by = ry > panelBottom + 36
+                ? Math.round(ry - 18)
+                : Math.round(panelBottom + 2);
             this._badge.set_position(bx, by);
         }
     }
 
     getX() {
         return this._curX;
+    }
+
+    getY() {
+        return this._curY;
     }
 }
 
@@ -432,6 +487,12 @@ export class PetStageManager {
         this._releasingIds = new Set();
         this._arenaFallbackTimerId = 0;
 
+        this._visSignalId = this._settings.connect('changed::pets-visible', () => {
+            if (!this._settings.get_boolean('pets-visible'))
+                this._effects?.clearAllBubbles?.();
+            this.syncLocalRoster();
+        });
+
         this.syncLocalRoster();
 
         this._socialTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 40, () => {
@@ -439,6 +500,8 @@ export class PetStageManager {
                 this._socialTimerId = 0;
                 return GLib.SOURCE_REMOVE;
             }
+            if (!this._settings.get_boolean('pets-visible'))
+                return GLib.SOURCE_CONTINUE;
             for (const remote of this.remoteActors.values())
                 remote.tick(40);
             this._checkPetToPetEncounters();
@@ -447,6 +510,10 @@ export class PetStageManager {
     }
 
     destroy() {
+        if (this._visSignalId && this._settings) {
+            this._settings.disconnect(this._visSignalId);
+            this._visSignalId = 0;
+        }
         if (this._arenaFallbackTimerId) {
             GLib.Source.remove(this._arenaFallbackTimerId);
             this._arenaFallbackTimerId = 0;
@@ -563,38 +630,42 @@ export class PetStageManager {
     }
 
     syncLocalRoster() {
+        const masterVis = this._settings.get_boolean('pets-visible');
         const desiredIds = new Set();
 
-        this._roster.pets.forEach((petRec, idx) => {
-            if (petRec.onTopBar === false || this._releasingIds.has(petRec.id))
-                return;
-            desiredIds.add(petRec.id);
+        if (masterVis) {
+            this._roster.pets.forEach((petRec, idx) => {
+                if (petRec.onTopBar === false || this._releasingIds.has(petRec.id))
+                    return;
+                desiredIds.add(petRec.id);
 
-            const existing = this.localActors.get(petRec.id);
-            if (existing) {
-                existing.updateProfile(petRec);
-            } else {
-                const actor = new PetActor({
-                    extensionPath: this._extensionPath,
-                    settings: this._settings,
-                    petRecord: petRec,
-                    slotIndex: idx,
-                    roster: this._roster,
-                    perception: this._perception,
-                    effects: this._effects,
-                    sysMonitor: this._sysMonitor,
-                    callbacks: {
-                        onStartPracticeBattle: opp => this._callbacks.onStartPracticeBattle?.(opp),
-                        onRequestReleasePet: id => this.releasePetWithAnimation(id),
-                        onOpenPrefs: () => this._callbacks.onOpenPrefs?.(),
-                    },
-                });
-                this.localActors.set(petRec.id, actor);
-            }
-        });
+                const existing = this.localActors.get(petRec.id);
+                if (existing) {
+                    existing.updateProfile(petRec);
+                } else {
+                    const actor = new PetActor({
+                        extensionPath: this._extensionPath,
+                        settings: this._settings,
+                        petRecord: petRec,
+                        slotIndex: idx,
+                        roster: this._roster,
+                        perception: this._perception,
+                        effects: this._effects,
+                        sysMonitor: this._sysMonitor,
+                        callbacks: {
+                            onStartPracticeBattle: opp => this._callbacks.onStartPracticeBattle?.(opp),
+                            onRequestReleasePet: id => this.releasePetWithAnimation(id),
+                            onOpenPrefs: () => this._callbacks.onOpenPrefs?.(),
+                        },
+                    });
+                    this.localActors.set(petRec.id, actor);
+                }
+            });
+        }
 
         for (const [id, actor] of this.localActors.entries()) {
             if (!desiredIds.has(id) && !this._releasingIds.has(id)) {
+                this._effects?.clearBubbleByKey?.(id);
                 actor.destroy();
                 this.localActors.delete(id);
             }
@@ -629,6 +700,7 @@ export class PetStageManager {
                 extensionPath: this._extensionPath,
                 settings: this._settings,
                 peerInfo,
+                perception: this._perception,
                 lanManager: this._lanManager,
                 effects: this._effects,
                 onChallengePeer: peer => this._callbacks.onChallengeLanPeer?.(peer),
@@ -664,26 +736,29 @@ export class PetStageManager {
         const now = Date.now();
         const locals = Array.from(this.localActors.values()).filter(a => a.isAvailableForSocial());
 
-        // 1. Sibling-to-Sibling encounters (among your up to 3 adopted pets!)
+        // 1. Sibling-to-Sibling encounters (among all active adopted pets!)
         for (let i = 0; i < locals.length; i++) {
+            const a = locals[i];
+            if (!a.isAvailableForSocial() || now - a.lastSocialMs < 8500)
+                continue;
             for (let j = i + 1; j < locals.length; j++) {
-                const a = locals[i];
                 const b = locals[j];
-                if (now - a.lastSocialMs < 8500 || now - b.lastSocialMs < 8500)
+                if (!b.isAvailableForSocial() || now - b.lastSocialMs < 8500)
                     continue;
                 const snapA = a.getMotionSnapshot();
                 const snapB = b.getMotionSnapshot();
-                if (Math.abs(snapA.x - snapB.x) <= 42) {
+                if (Math.abs(snapA.x - snapB.x) <= 42 && Math.abs(snapA.y - snapB.y) <= 36) {
                     const chosen = DUO_KINDS[Math.floor(Math.random() * DUO_KINDS.length)];
                     a.triggerSocialInteraction(b.pet.name, snapB.x, chosen, 'A');
                     b.triggerSocialInteraction(a.pet.name, snapA.x, chosen, 'B');
                     this._roster.grantXp(a.pet.id, 4);
                     this._roster.grantXp(b.pet.id, 4);
+                    break;
                 }
             }
         }
 
-        // 2. Local-to-LAN Visitor encounters!
+        // 2. Local-to-LAN Visitor encounters (2D aware)!
         for (const local of locals) {
             if (now - local.lastSocialMs < 9500)
                 continue;
@@ -691,7 +766,7 @@ export class PetStageManager {
             for (const remote of this.remoteActors.values()) {
                 if (remote.isInArenaBattle() || now - remote.lastSocialMs < 9500)
                     continue;
-                if (Math.abs(snapL.x - remote.getX()) <= 42) {
+                if (Math.abs(snapL.x - remote.getX()) <= 42 && Math.abs(snapL.y - remote.getY()) <= 36) {
                     const visitorKinds = ['high_five', 'sync_dance', 'spar_clash', 'leapfrog', 'nuzzle', 'gossip_chat'];
                     const chosen = visitorKinds[Math.floor(Math.random() * visitorKinds.length)];
                     // For leapfrog with a remote visitor, remote crouches ('A') while local vaults over ('B')!

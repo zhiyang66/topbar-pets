@@ -115,6 +115,7 @@ export class BattleArenaManager {
 
         this._arenaCard = null;
         this._loopId = 0;
+        this._closeIdleId = 0;
         this._dragCaptureId = 0;
         this._spawnFloatText = null;
         this._battleToken = 0;
@@ -362,10 +363,13 @@ export class BattleArenaManager {
             track_hover: true,
         });
         closeBtn.connect('button-press-event', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this.closeArena();
-                return GLib.SOURCE_REMOVE;
-            });
+            if (!this._closeIdleId) {
+                this._closeIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._closeIdleId = 0;
+                    this.closeArena();
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
             return Clutter.EVENT_STOP;
         });
         closeBtn.connect('clicked', () => this.closeArena());
@@ -586,6 +590,10 @@ export class BattleArenaManager {
     closeArena() {
         this._battleToken += 1;
         this._spawnFloatText = null;
+        if (this._closeIdleId) {
+            GLib.Source.remove(this._closeIdleId);
+            this._closeIdleId = 0;
+        }
         if (this._loopId) {
             GLib.Source.remove(this._loopId);
             this._loopId = 0;

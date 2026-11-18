@@ -15,9 +15,30 @@ import { UpdateChecker } from './src/updateChecker.js';
 
 export default class TopBarPetExtension extends Extension {
     enable() {
+        if (this._isEnabled)
+            return;
+        this._isEnabled = true;
+
+        try {
+            this._enableCore();
+        } catch (err) {
+            this.disable();
+            throw err;
+        }
+    }
+
+    _enableCore() {
         this._settings = this.getSettings();
         this._effects = new EffectsManager();
         this._prefsProc = null;
+        this._panelDestroySignal = 0;
+
+        if (Main.layoutManager?.panelBox) {
+            this._panelDestroySignal = Main.layoutManager.panelBox.connect('destroy', () => {
+                this._panelDestroySignal = 0;
+                this.disable();
+            });
+        }
 
         this._updateChecker = new UpdateChecker({
             extensionPath: this.path,
@@ -194,6 +215,13 @@ export default class TopBarPetExtension extends Extension {
     _syncPanelIndicator() {
         const shouldShow = this._settings.get_boolean('show-panel-icon');
         if (shouldShow && !this._indicator) {
+            const stale = Main.panel?.statusArea?.[this.uuid];
+            if (stale) {
+                try {
+                    stale.destroy();
+                } catch (_e) {}
+                delete Main.panel.statusArea[this.uuid];
+            }
             this._indicator = new PetPanelIndicator({
                 extensionPath: this.path,
                 settings: this._settings,
@@ -213,6 +241,13 @@ export default class TopBarPetExtension extends Extension {
     }
 
     disable() {
+        this._isEnabled = false;
+        if (this._panelDestroySignal && Main.layoutManager?.panelBox) {
+            try {
+                Main.layoutManager.panelBox.disconnect(this._panelDestroySignal);
+            } catch (_e) {}
+            this._panelDestroySignal = 0;
+        }
         if (this._prefsProc) {
             try {
                 this._prefsProc.force_exit();

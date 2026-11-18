@@ -186,6 +186,7 @@ export class LanManager {
             fromPeerId: this.peerId,
             fromOwner: this._roster.getOwnerName(),
             fromPetName: primary.name,
+            replyTcpPort: this._tcpPort,
         });
     }
 
@@ -287,6 +288,8 @@ export class LanManager {
             presetId: primary.presetId || 'cat',
             skinHash: skinDesc.skinHash,
             normX: Math.max(0, Math.min(1, Number(motion.normX) || 0.5)),
+            normY: Math.max(0, Math.min(1, Number(motion.normY) || 0)),
+            freeRoam: Boolean(motion.freeRoam),
             state: motion.state || 'walk',
             facing: motion.facing || 'right',
         });
@@ -354,6 +357,8 @@ export class LanManager {
                     presetId: String(msg.presetId || 'shiba'),
                     skinHash: String(msg.skinHash || 'preset:shiba'),
                     normX: Math.max(0.02, Math.min(0.98, Number(msg.normX) || 0.5)),
+                    normY: Math.max(0, Math.min(1, Number(msg.normY) || 0)),
+                    freeRoam: Boolean(msg.freeRoam),
                     state: String(msg.state || 'walk'),
                     facing: msg.facing === 'left' ? 'left' : 'right',
                     lastSeenMs: Date.now(),

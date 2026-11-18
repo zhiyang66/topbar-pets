@@ -100,7 +100,9 @@ udp.set_broadcast(true);
 udp.set_blocking(false);
 
 let normX = 0.68;
+let normY = 0.0;
 let dir = -1;
+let yPhase = 0;
 const loop = GLib.MainLoop.new(null, false);
 
 const broadcastOnce = () => {
@@ -112,6 +114,8 @@ const broadcastOnce = () => {
         normX = 0.84;
         dir = -1;
     }
+    yPhase += 0.22;
+    normY = Math.max(0, Math.min(0.85, (Math.sin(yPhase) + 0.6) * 0.38));
 
     const msg = JSON.stringify({
         magic: 'TOPBAR_PET_V2',
@@ -124,6 +128,8 @@ const broadcastOnce = () => {
         presetId: botFighter.presetId,
         skinHash: botFighter.skinHash,
         normX,
+        normY,
+        freeRoam: normY > 0.04,
         state: 'walk',
         facing: dir > 0 ? 'right' : 'left',
     });

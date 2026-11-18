@@ -8,7 +8,6 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { boxLayoutProps } from './compat.js';
 import {
-    MAX_ADOPTED_PETS,
     SPECIES_PRESETS,
     getArchetype,
     xpRequiredForLevel,
@@ -54,9 +53,17 @@ class PetPanelIndicator extends PanelMenu.Button {
         this._buildMenu();
 
         this._settingsSignals = [
+            this._settings.connect('changed::pets-visible', () => {
+                if (this._petsVisibleSwitch)
+                    this._petsVisibleSwitch.setToggleState(this._settings.get_boolean('pets-visible'));
+            }),
             this._settings.connect('changed::click-through', () => {
                 if (this._ghostSwitch)
                     this._ghostSwitch.setToggleState(this._settings.get_boolean('click-through'));
+            }),
+            this._settings.connect('changed::free-roam-enabled', () => {
+                if (this._freeRoamSwitch)
+                    this._freeRoamSwitch.setToggleState(this._settings.get_boolean('free-roam-enabled'));
             }),
         ];
 
@@ -195,8 +202,8 @@ class PetPanelIndicator extends PanelMenu.Button {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Dynamic Pet Roster Submenu (Switch / Adopt / Release)
-        this._rosterSub = new PopupMenu.PopupSubMenuMenuItem('🐾 我的宠物小队 (1/3)');
+        // Dynamic Pet Roster Submenu (Switch / Show-Hide / Adopt / Release — Unlimited!)
+        this._rosterSub = new PopupMenu.PopupSubMenuMenuItem('🐾 我的宠物小队');
         this.menu.addMenuItem(this._rosterSub);
 
         // Dynamic LAN Multiplayer Submenu
@@ -209,9 +216,11 @@ class PetPanelIndicator extends PanelMenu.Button {
         });
         this._siblingSparItem = this.menu.addAction('🥊 自家宠物伙伴切磋赛', () => {
             const primary = this._roster.getPrimaryPet();
-            const other = this._roster.pets.find(p => p.id !== primary.id);
-            if (other)
-                this._battleArena.startPracticeBattle(other);
+            const others = this._roster.pets.filter(p => p.id !== primary?.id);
+            if (others.length > 0) {
+                const chosen = others[Math.floor(Math.random() * others.length)];
+                this._battleArena.startPracticeBattle(chosen);
+            }
         });
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -219,6 +228,24 @@ class PetPanelIndicator extends PanelMenu.Button {
         this.menu.addAction('🤸 来个随机耍宝特技', () => {
             this._stageManager.getPrimaryActor()?.performRandomStunt();
         });
+
+        this._petsVisibleSwitch = new PopupMenu.PopupSwitchMenuItem(
+            '🐾 显示桌面宠物 (总开关)',
+            this._settings.get_boolean('pets-visible')
+        );
+        this._petsVisibleSwitch.connect('toggled', (_item, state) => {
+            this._settings.set_boolean('pets-visible', state);
+        });
+        this.menu.addMenuItem(this._petsVisibleSwitch);
+
+        this._freeRoamSwitch = new PopupMenu.PopupSwitchMenuItem(
+            '🖥️ 全屏自由漫游模式',
+            this._settings.get_boolean('free-roam-enabled')
+        );
+        this._freeRoamSwitch.connect('toggled', (_item, state) => {
+            this._settings.set_boolean('free-roam-enabled', state);
+        });
+        this.menu.addMenuItem(this._freeRoamSwitch);
 
         this._ghostSwitch = new PopupMenu.PopupSwitchMenuItem(
             '👻 鼠标穿透模式',
@@ -274,37 +301,51 @@ class PetPanelIndicator extends PanelMenu.Button {
     }
 
     _rebuildDynamicSubmenus() {
-        // 1. Rebuild Adopted Roster Submenu
-        this._rosterSub.label.text = `🐾 我的宠物小队 (${this._roster.pets.length}/${MAX_ADOPTED_PETS})`;
+        // 1. Rebuild Adopted Roster Submenu (Unlimited Pets + Per-Pet Visibility Switches!)
+        const activeCount = this._roster.pets.filter(p => p.onTopBar !== false).length;
+        this._rosterSub.label.text = `🐾 我的宠物小队 (出场 ${activeCount} / 共 ${this._roster.pets.length} 只)`;
         this._rosterSub.menu.removeAll();
 
         for (const pet of this._roster.pets) {
             const isPrimary = pet.id === this._roster.primaryPetId;
             const arch = getArchetype(pet.archetype);
-            this._rosterSub.menu.addAction(
-                `${isPrimary ? '👑 ' : '🐾 '}${pet.name} · Lv.${pet.level} [${arch.badge}]${isPrimary ? ' (主战)' : ' (点此切换主战)'}`,
-                () => {
-                    this._roster.setPrimaryPet(pet.id);
-                    this.refreshStats();
-                }
+            const visItem = new PopupMenu.PopupSwitchMenuItem(
+                `${isPrimary ? '👑 ' : '🐾 '}${pet.name} · Lv.${pet.level} [${arch.badge}]${isPrimary ? ' (主战)' : ''}`,
+                pet.onTopBar !== false
             );
+            visItem.connect('toggled', (_item, state) => {
+                this._roster.setPetVisible(pet.id, state);
+                if (state && !this._settings.get_boolean('pets-visible'))
+                    this._settings.set_boolean('pets-visible', true);
+                this.refreshStats();
+            });
+            this._rosterSub.menu.addMenuItem(visItem);
         }
 
-        if (this._roster.canAdoptMore()) {
+        const nonPrimaryPets = this._roster.pets.filter(p => p.id !== this._roster.primaryPetId);
+        if (nonPrimaryPets.length > 0) {
             this._rosterSub.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            for (const sp of SPECIES_PRESETS.slice(1, 5)) {
-                this._rosterSub.menu.addAction(`➕ 快速领养 ${sp.label}`, () => {
-                    this._roster.adoptPet({
-                        name: sp.defaultName,
-                        presetId: sp.id,
-                        archetype: sp.defaultArchetype,
-                    });
+            for (const pet of nonPrimaryPets) {
+                this._rosterSub.menu.addAction(`👑 设「${pet.name}」为主战代表`, () => {
+                    this._roster.setPrimaryPet(pet.id);
+                    this.refreshStats();
                 });
             }
-            this._rosterSub.menu.addAction('✨ 导入自定义宠物 / AI生成…', () => {
-                this._onOpenPrefs?.();
+        }
+
+        this._rosterSub.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        for (const sp of SPECIES_PRESETS) {
+            this._rosterSub.menu.addAction(`➕ 快速领养 ${sp.label}`, () => {
+                this._roster.adoptPet({
+                    name: sp.defaultName,
+                    presetId: sp.id,
+                    archetype: sp.defaultArchetype,
+                });
             });
         }
+        this._rosterSub.menu.addAction('✨ 导入自定义宠物 / AI生成 / 批量管理…', () => {
+            this._onOpenPrefs?.();
+        });
 
         if (this._siblingSparItem)
             this._siblingSparItem.visible = this._roster.pets.length >= 2;

@@ -26,8 +26,10 @@ export class EffectsManager {
         for (const b of this._fxBursts) {
             if (b.timerId)
                 GLib.Source.remove(b.timerId);
-            removeChromeActor(b.widget);
-            b.widget.destroy();
+            if (b.widget) {
+                removeChromeActor(b.widget);
+                b.widget.destroy();
+            }
         }
         this._fxBursts.clear();
 
@@ -102,6 +104,9 @@ export class EffectsManager {
 
         const jitterX = Math.round((Math.random() - 0.5) * 18);
         label.set_position(Math.round(x + jitterX), Math.round(y));
+        label.connect('destroy', () => {
+            this._particles.delete(label);
+        });
 
         addChromeActor(label, {
             interactive: false,
@@ -156,13 +161,26 @@ export class EffectsManager {
 
         addChromeActor(widget, { interactive: false, trackFullscreen: true });
         const entry = { widget, timerId: 0 };
+        widget.connect('destroy', () => {
+            entry.widget = null;
+            if (entry.timerId) {
+                GLib.Source.remove(entry.timerId);
+                entry.timerId = 0;
+            }
+            this._fxBursts.delete(entry);
+        });
         this._fxBursts.add(entry);
 
         entry.timerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
-            if (!surf.step(0.033)) {
+            if (!entry.widget || !surf.step(0.033)) {
+                entry.timerId = 0;
                 this._fxBursts.delete(entry);
-                removeChromeActor(widget);
-                widget.destroy();
+                if (entry.widget) {
+                    const w = entry.widget;
+                    entry.widget = null;
+                    removeChromeActor(w);
+                    w.destroy();
+                }
                 return GLib.SOURCE_REMOVE;
             }
             return GLib.SOURCE_CONTINUE;
@@ -196,6 +214,10 @@ export class EffectsManager {
 
         box.add_child(title);
         box.add_child(sub);
+        box.connect('destroy', () => {
+            if (this._levelToast === box)
+                this._levelToast = null;
+        });
         addChromeActor(box, { interactive: false, trackFullscreen: true });
         this._levelToast = box;
 
@@ -274,6 +296,15 @@ export class EffectsManager {
             createdAt: ++this._bubbleSeq,
             timerId: 0,
         };
+        bubble.connect('destroy', () => {
+            entry.actor = null;
+            if (entry.timerId) {
+                GLib.Source.remove(entry.timerId);
+                entry.timerId = 0;
+            }
+            if (this._bubbles.get(ownerKey) === entry)
+                this._bubbles.delete(ownerKey);
+        });
         this._bubbles.set(ownerKey, entry);
 
         this._layoutAllBubbles();
@@ -326,6 +357,8 @@ export class EffectsManager {
         const panelY = panelBox?.y ?? 0;
         const panelW = panelBox?.width || 1280;
         const panelH = panelBox?.height ?? 32;
+        const mon = Main.layoutManager?.primaryMonitor;
+        const screenBottom = (Number.isFinite(mon?.y) ? mon.y : panelY) + ((mon?.height > 120) ? mon.height : 1080);
 
         const items = [];
         for (const [key, entry] of this._bubbles.entries()) {
@@ -342,7 +375,11 @@ export class EffectsManager {
             const w = Math.max(48, Number.isFinite(natW) ? natW : 110);
             const h = Math.max(24, Number.isFinite(natH) ? natH : 26);
             const anchorCenterX = rect.x + rect.width / 2;
-            const baseY = Math.round(Math.max(panelY + panelH + 5, rect.y + rect.height + 4));
+            const panelBottom = panelY + panelH;
+            const placeAbove = rect.y > panelBottom + 44;
+            const baseY = placeAbove
+                ? Math.round(Math.max(panelBottom + 4, rect.y - h - 6))
+                : Math.round(Math.max(panelBottom + 5, rect.y + rect.height + 4));
 
             items.push({
                 entry,
@@ -350,6 +387,7 @@ export class EffectsManager {
                 h,
                 anchorCenterX,
                 baseY,
+                stackUp: placeAbove,
                 x: 0,
                 y: baseY,
             });
@@ -401,13 +439,24 @@ export class EffectsManager {
                 );
                 if (!hit)
                     break;
-                y = hit.y + hit.h + PAD_Y;
+                if (item.stackUp && hit.y - item.h - PAD_Y >= panelY + panelH + 4)
+                    y = hit.y - item.h - PAD_Y;
+                else
+                    y = hit.y + hit.h + PAD_Y;
                 guard += 1;
             }
-            item.y = Math.round(y);
+            item.y = Math.max(panelY + panelH + 4, Math.min(screenBottom - item.h - 4, Math.round(y)));
             placed.push(item);
             item.entry.actor.set_position(item.x, item.y);
         }
+    }
+
+    clearBubbleByKey(ownerKey) {
+        this._clearBubbleByKey(ownerKey);
+    }
+
+    clearAllBubbles() {
+        this._clearAllBubbles();
     }
 
     _clearBubbleByKey(ownerKey) {
@@ -415,12 +464,16 @@ export class EffectsManager {
         if (!entry)
             return;
         this._bubbles.delete(ownerKey);
-        if (entry.timerId)
+        if (entry.timerId) {
             GLib.Source.remove(entry.timerId);
+            entry.timerId = 0;
+        }
         if (entry.actor) {
-            entry.actor.remove_all_transitions();
-            removeChromeActor(entry.actor);
-            entry.actor.destroy();
+            const act = entry.actor;
+            entry.actor = null;
+            act.remove_all_transitions();
+            removeChromeActor(act);
+            act.destroy();
         }
         if (this._bubbles.size > 0)
             this._layoutAllBubbles();

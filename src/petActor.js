@@ -120,9 +120,16 @@ export class PetActor {
         this._arenaDiveStarted = false;
         this._onArenaArrived = null;
 
-        // Top-bar widget, stunt & social state
+        // Top-bar widget, full-screen surface, stunt & social state
         this._widgetCooldowns = new WeakMap();
         this._activeTarget = null;
+        this._roamSurface = 'topbar'; // 'topbar' | 'ledge' | 'floor' | 'air'
+        this._activeLedge = null;     // { metaWin, appName, x1, x2, y }
+        this._fallVy = 0;
+        this._climbDirY = -1;
+        this._ascendTargetY = 0;
+        this._ascendLedge = null;
+        this._propBadge = null;       // Non-reactive 🪂 / 🎈 prop badge above pet
         this._lastHitComboStep = -1;
         this._stuntTriggered = false;
         this._sneakExitX = null;
@@ -136,9 +143,11 @@ export class PetActor {
         this._dragStartX = 0;
         this._dragStartY = 0;
         this._actorStartX = 0;
+        this._actorStartY = 0;
         this._stageCaptureId = 0;
         this._clickCombo = 0;
         this._lastClickMs = 0;
+        this._replyTimerId = 0;
 
         const clickThrough = this._settings.get_boolean('click-through');
         this._actor = new St.Widget({
@@ -182,6 +191,10 @@ export class PetActor {
                 if (this._actor && !this._inArenaBattle)
                     this._actor.opacity = Math.max(50, Math.min(255, this._settings.get_int('pet-opacity')));
             }),
+            this._settings.connect('changed::free-roam-enabled', () => {
+                this._onFreeRoamToggled();
+                this._rebuildContextMenuItems();
+            }),
         ];
 
         this.reloadSprites();
@@ -211,6 +224,7 @@ export class PetActor {
             this._loopId = 0;
         }
         this._endStageDragCapture();
+        this._clearPropBadge();
 
         for (const id of this._settingsSignals)
             this._settings.disconnect(id);
@@ -256,27 +270,44 @@ export class PetActor {
 
     isAvailableForSocial() {
         return !this._isReleasing && !this._inArenaBattle &&
-            !['drag', 'arena_enter', 'sleep'].includes(this._state);
+            !['drag', 'arena_enter', 'sleep', 'parachute_glide', 'balloon_ascend', 'wall_climb', 'free_fall'].includes(this._state);
     }
 
     isInArenaBattle() {
         return this._inArenaBattle;
     }
 
+    isFreeRoamEnabled() {
+        return this._settings.get_boolean('free-roam-enabled');
+    }
+
     getMotionSnapshot() {
         const bounds = this._getBounds();
-        const span = bounds ? Math.max(1, bounds.maxX - bounds.minX) : 1200;
-        const baseMin = bounds ? bounds.minX : 0;
+        const spanX = bounds ? Math.max(1, bounds.maxX - bounds.minX) : 1200;
+        const baseMinX = bounds ? bounds.minX : 0;
         const safeX = Number.isFinite(this._x) ? this._x : 240;
-        let netState = 'walk';
-        if (['attack', 'sneak', 'cast', 'hurt', 'sleep', 'happy', 'run', 'walk', 'idle', 'crouch', 'guard'].includes(this._state))
-            netState = this._state;
+        const safeY = Number.isFinite(this._y) ? this._y : (bounds?.groundY ?? 0);
+        const freeRoam = this.isFreeRoamEnabled();
+        let normY = 0;
+        if (freeRoam && bounds && bounds.bottomGroundY > bounds.groundY) {
+            normY = Math.max(0, Math.min(1, (safeY - bounds.groundY) / (bounds.bottomGroundY - bounds.groundY)));
+        }
+
+        const animKey = this._resolveAnimKey();
+        const netState = ['attack', 'sneak', 'cast', 'hurt', 'sleep', 'happy', 'run', 'walk', 'idle', 'crouch', 'guard'].includes(animKey)
+            ? animKey
+            : 'walk';
+
         return {
-            normX: Math.max(0, Math.min(1, (safeX - baseMin) / span)),
+            normX: Math.max(0, Math.min(1, (safeX - baseMinX) / spanX)),
+            normY,
+            freeRoam: freeRoam && normY > 0.02,
             state: netState,
             facing: this._facing,
             x: safeX,
+            y: safeY,
             width: this._petW,
+            height: this._petH,
         };
     }
 
@@ -310,8 +341,132 @@ export class PetActor {
         if (!bounds)
             return;
         this._x = Math.max(bounds.minX, Math.min(bounds.maxX, Number.isFinite(this._x) ? this._x : bounds.minX + 180));
-        this._y = bounds.groundY;
+        if (!this.isFreeRoamEnabled() || this._roamSurface === 'topbar')
+            this._y = bounds.groundY;
+        else
+            this._y = Math.max(bounds.groundY, Math.min(bounds.bottomGroundY, Number.isFinite(this._y) ? this._y : bounds.groundY));
         this._applyPosition();
+    }
+
+    _onFreeRoamToggled() {
+        if (this._isReleasing)
+            return;
+        if (this._inArenaBattle) {
+            this._clearPropBadge();
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
+            return;
+        }
+
+        const bounds = this._getBounds();
+        this._clearPropBadge();
+        this._resetPoseTransform();
+
+        if (this.isFreeRoamEnabled()) {
+            if (this.isAvailableForSocial() && bounds) {
+                if (this._slotIndex === 0) {
+                    this.say('🎉 解锁全屏自由漫游！去窗口屋顶和桌面探险咯~ 🪂✨', 2600);
+                    this._startParachuteDive(bounds, false);
+                } else if (this._slotIndex % 2 === 1) {
+                    this._startWallClimb(bounds, false);
+                } else {
+                    this._startParachuteDive(bounds, false);
+                }
+            }
+        } else {
+            // Smoothly return to Top Bar when Full-Screen Free Roam is turned off!
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
+            this._ascendLedge = null;
+            this._fallVy = 0;
+            if (bounds) {
+                this._y = bounds.groundY;
+                this._jumpY = 16;
+                this._vy = -5.4;
+                this._setState('happy', 1200);
+                this._applyPosition();
+            }
+            if (this._slotIndex === 0)
+                this.say('回到顶部栏乖乖巡逻咯~ 🐾', 2000);
+        }
+    }
+
+    _setPropBadge(symbol) {
+        if (!symbol) {
+            this._clearPropBadge();
+            return;
+        }
+        if (this._propBadge) {
+            this._propBadge.text = symbol;
+            return;
+        }
+        const lbl = new St.Label({
+            text: symbol,
+            style_class: 'topbar-pet-particle',
+            reactive: false,
+            opacity: 245,
+        });
+        lbl.connect('destroy', () => {
+            if (this._propBadge === lbl)
+                this._propBadge = null;
+        });
+        addChromeActor(lbl, { interactive: false, trackFullscreen: true });
+        this._propBadge = lbl;
+    }
+
+    _clearPropBadge() {
+        if (this._propBadge) {
+            removeChromeActor(this._propBadge);
+            this._propBadge.destroy();
+            this._propBadge = null;
+        }
+    }
+
+    _startParachuteDive(bounds, speak = true) {
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._resetPoseTransform();
+        this._setPropBadge('🪂');
+        this._setState('parachute_glide', 14000);
+        if (speak && Math.random() < 0.7)
+            this.say('开小降落伞去屏幕下面兜风咯~ 🪂✨', 2200);
+        void bounds;
+    }
+
+    _startBalloonAscent(bounds, targetLedge = null, speak = true) {
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._ascendLedge = targetLedge;
+        this._ascendTargetY = targetLedge ? targetLedge.y : bounds.groundY;
+        this._resetPoseTransform();
+        this._setPropBadge('🎈');
+        this._setState('balloon_ascend', 14000);
+        if (speak && Math.random() < 0.7) {
+            this.say(
+                targetLedge
+                    ? `抓着气球飞去「${targetLedge.appName}」窗口顶上看看 🎈✨`
+                    : '乘着小气球飞回顶部栏咯~ 🎈🐾',
+                2200
+            );
+        }
+    }
+
+    _startWallClimb(bounds, speak = true) {
+        this._activeTarget = null;
+        this._activeLedge = null;
+        this._roamSurface = 'air';
+        this._resetPoseTransform();
+        // Climb UP if currently in lower half of screen, otherwise climb DOWN!
+        const midScreenY = (bounds.groundY + bounds.bottomGroundY) / 2;
+        this._climbDirY = this._y > midScreenY ? -1 : 1;
+        this._x = (Math.abs(this._x - bounds.minX) <= Math.abs(this._x - bounds.maxX))
+            ? bounds.minX
+            : bounds.maxX;
+        this._setState('wall_climb', 2800 + Math.random() * 1800);
+        if (speak && Math.random() < 0.72)
+            this.say('飞檐走壁爬屏幕边框咯！🧗🐾', 2100);
     }
 
     // =========================================================================
@@ -325,6 +480,7 @@ export class PetActor {
         if (this._contextMenu?.isOpen)
             this._contextMenu.close();
         this._endStageDragCapture();
+        this._clearPropBadge();
         this._dragging = false;
         this._resetPoseTransform();
 
@@ -357,6 +513,8 @@ export class PetActor {
             const center = (bounds.minX + bounds.maxX) / 2;
             this._x = Math.max(bounds.minX, Math.min(bounds.maxX, Math.round(center + (this._slotIndex - 0.5) * 56)));
             this._y = bounds.groundY;
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
         }
 
         this._resetPoseTransform();
@@ -394,8 +552,27 @@ export class PetActor {
         if (!bounds)
             return;
 
-        // Either raid a nearby panel icon or perform an acrobatic solo trick!
-        if (Math.random() < 0.45 && this._perception) {
+        const freeRoam = this.isFreeRoamEnabled();
+        const onTopBar = !freeRoam || this._roamSurface === 'topbar';
+
+        // In Full-Screen Mode, mix in vertical skydiving / balloon / wall-climb stunts too!
+        if (freeRoam && Math.random() < 0.36) {
+            if (this._roamSurface === 'topbar') {
+                this._startParachuteDive(bounds);
+                return;
+            } else if (this._roamSurface === 'floor') {
+                const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+                const pickLedge = ledges.length > 0 && Math.random() < 0.65 ? pick(ledges) : null;
+                this._startBalloonAscent(bounds, pickLedge);
+                return;
+            } else if (this._roamSurface === 'ledge') {
+                this._startParachuteDive(bounds);
+                return;
+            }
+        }
+
+        // Only raid a Top-Bar panel icon when actually standing on the Top Bar!
+        if (onTopBar && Math.random() < 0.45 && this._perception) {
             const targets = this._perception.scanLiveTargets();
             if (targets.length > 0) {
                 this._activeTarget = pick(targets);
@@ -542,6 +719,8 @@ export class PetActor {
 
     playFarewellAndDestroy(onDone) {
         this._isReleasing = true;
+        this._endStageDragCapture();
+        this._clearPropBadge();
         this._resetPoseTransform();
         this._setState('happy', 2500);
         this._jump(-4.5);
@@ -954,11 +1133,20 @@ export class PetActor {
         }
 
         const siblings = this._roster.pets.filter(p => p.id !== this.pet.id);
-        if (siblings.length > 0) {
+        if (siblings.length === 1) {
             this._contextMenu.addAction(`⚔️ 与自家伙伴「${siblings[0].name}」切磋对战！`, () => {
                 this._roster.setPrimaryPet(this.pet.id);
                 this._callbacks.onStartPracticeBattle?.(siblings[0]);
             });
+        } else if (siblings.length > 1) {
+            const sparSub = new PopupMenu.PopupSubMenuMenuItem(`⚔️ 与自家伙伴切磋 (${siblings.length} 只可选)`);
+            for (const sib of siblings) {
+                sparSub.menu.addAction(`🥊 挑战「${sib.name}」 (Lv.${sib.level})`, () => {
+                    this._roster.setPrimaryPet(this.pet.id);
+                    this._callbacks.onStartPracticeBattle?.(sib);
+                });
+            }
+            this._contextMenu.addMenuItem(sparSub);
         }
         this._contextMenu.addAction('🤖 开启擂台挑战赛', () => {
             this._roster.setPrimaryPet(this.pet.id);
@@ -972,6 +1160,18 @@ export class PetActor {
             this._state === 'sleep' ? '☀️ 轻轻唤醒' : '💤 打个小盹',
             () => this.toggleSleep()
         );
+        this._contextMenu.addAction('🙈 暂时收回休息 (隐藏此宠物)', () => {
+            this._roster.setPetVisible(this.pet.id, false);
+        });
+
+        const freeRoamItem = new PopupMenu.PopupSwitchMenuItem(
+            '🖥️ 全屏自由漫游模式',
+            this.isFreeRoamEnabled()
+        );
+        freeRoamItem.connect('toggled', (_item, state) => {
+            this._settings.set_boolean('free-roam-enabled', state);
+        });
+        this._contextMenu.addMenuItem(freeRoamItem);
 
         this._contextMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -991,6 +1191,10 @@ export class PetActor {
     }
 
     _getBounds() {
+        const vOffset = this._settings.get_int('vertical-offset');
+        if (this._perception?.getScreenRoamBounds)
+            return this._perception.getScreenRoamBounds(this._petW, this._petH, vOffset);
+
         const panelBox = Main.layoutManager?.panelBox;
         if (!panelBox || !panelBox.get_stage?.())
             return null;
@@ -1004,14 +1208,11 @@ export class PetActor {
         const px = Number.isFinite(panelBox.x) ? panelBox.x : 0;
         const py = Number.isFinite(panelBox.y) ? panelBox.y : 0;
         const ph = (Number.isFinite(panelBox.height) && panelBox.height > 12) ? panelBox.height : 32;
-
-        const vOffset = this._settings.get_int('vertical-offset');
         const groundY = Math.max(0, py + ph - this._petH + vOffset);
-
         const minX = px + 6;
         const maxX = Math.max(minX + 16, px + pw - this._petW - 6);
 
-        return { minX, maxX, groundY, panelY: py, panelH: ph };
+        return { minX, maxX, groundY, bottomGroundY: groundY + 600, panelY: py, panelH: ph };
     }
 
     // =========================================================================
@@ -1038,6 +1239,7 @@ export class PetActor {
         this._dragStartX = sx;
         this._dragStartY = sy;
         this._actorStartX = this._x;
+        this._actorStartY = this._y;
 
         this._endStageDragCapture();
         this._stageCaptureId = global.stage.connect('captured-event', (_stage, ev) => {
@@ -1046,15 +1248,23 @@ export class PetActor {
                 const [mx, my] = ev.get_coords();
                 if (!this._dragging && (Math.abs(mx - this._dragStartX) > 5 || Math.abs(my - this._dragStartY) > 5)) {
                     this._dragging = true;
+                    this._clearPropBadge();
                     this._resetPoseTransform();
                     this._setState('drag', 60000);
                 }
                 if (this._dragging) {
                     const bounds = this._getBounds();
-                    if (bounds)
+                    const freeRoam = this.isFreeRoamEnabled();
+                    if (bounds) {
                         this._x = Math.max(bounds.minX, Math.min(bounds.maxX, this._actorStartX + (mx - this._dragStartX)));
+                        if (freeRoam) {
+                            this._y = Math.max(bounds.groundY, Math.min(bounds.bottomGroundY, this._actorStartY + (my - this._dragStartY)));
+                            this._jumpY = 0;
+                        } else {
+                            this._jumpY = Math.max(-12, Math.min(28, my - this._dragStartY));
+                        }
+                    }
                     this._facing = mx >= this._dragStartX ? 'right' : 'left';
-                    this._jumpY = Math.max(-12, Math.min(28, my - this._dragStartY));
                     this._applyPosition();
                     return Clutter.EVENT_STOP;
                 }
@@ -1064,11 +1274,15 @@ export class PetActor {
                 this._endStageDragCapture();
 
                 if (wasDragging) {
-                    this._vy = -3.0;
                     const bounds = this._getBounds();
-                    if (!bounds || !this._checkPanelEncounter(bounds, true)) {
-                        this._setState('happy', 900);
-                        this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 18);
+                    if (bounds && this.isFreeRoamEnabled()) {
+                        this._handleFreeRoamDrop(bounds);
+                    } else {
+                        this._vy = -3.0;
+                        if (!bounds || !this._checkPanelEncounter(bounds, true)) {
+                            this._setState('happy', 900);
+                            this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 18);
+                        }
                     }
                 } else {
                     this._handlePetClick();
@@ -1079,6 +1293,58 @@ export class PetActor {
         });
 
         return Clutter.EVENT_STOP;
+    }
+
+    _handleFreeRoamDrop(bounds) {
+        this._jumpY = 0;
+        // 1. Dropped near Top Bar -> snap back onto Top Bar!
+        if (this._y <= bounds.groundY + 26) {
+            this._y = bounds.groundY;
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
+            this._vy = -3.0;
+            if (!this._checkPanelEncounter(bounds, true)) {
+                this._setState('happy', 900);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 18);
+            }
+            return;
+        }
+
+        // 2. Dropped directly onto a window titlebar ledge!
+        const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+        for (const ledge of ledges) {
+            if (this._x >= ledge.x1 - 12 && this._x <= ledge.x2 + 12 && Math.abs(this._y - ledge.y) <= 26) {
+                this._y = ledge.y;
+                this._roamSurface = 'ledge';
+                this._activeLedge = ledge;
+                this._jump(-3.5);
+                this._setState('happy', 1100);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y, '🐾', 16);
+                this.say(`稳稳站在「${ledge.appName}」窗口屋顶啦 🐾✨`, 2100);
+                return;
+            }
+        }
+
+        // 3. Dropped near screen bottom -> land on floor!
+        if (this._y >= bounds.bottomGroundY - 24) {
+            this._y = bounds.bottomGroundY;
+            this._roamSurface = 'floor';
+            this._activeLedge = null;
+            this._jump(-3.5);
+            this._setState('happy', 1000);
+            this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 16);
+            return;
+        }
+
+        // 4. Dropped mid-air -> open parachute if high up, otherwise gentle gravity fall!
+        if (bounds.bottomGroundY - this._y > 160) {
+            this._startParachuteDive(bounds);
+        } else {
+            this._roamSurface = 'air';
+            this._activeLedge = null;
+            this._fallVy = 1.5;
+            this._setState('free_fall', 5000);
+        }
     }
 
     _endStageDragCapture() {
@@ -1165,12 +1431,22 @@ export class PetActor {
         if (!Number.isFinite(this._x)) {
             const span = Math.max(60, bounds.maxX - bounds.minX);
             this._x = Math.round(bounds.minX + span * ((0.22 + this._slotIndex * 0.27) % 0.85));
+            this._y = bounds.groundY;
         }
-        this._y = bounds.groundY;
+
+        const freeRoam = this.isFreeRoamEnabled();
+        if (!freeRoam) {
+            this._roamSurface = 'topbar';
+            this._activeLedge = null;
+            this._y = bounds.groundY;
+        } else if (!Number.isFinite(this._y)) {
+            this._y = bounds.groundY;
+        }
+
         this._statePhaseMs += dtMs;
 
         // ---------------------------------------------------------------------
-        // Special Choreography: Run to Top-Center & Leap Down into Battle Arena!
+        // Special Choreography: 2D Sprint/Fly to Top-Center & Dive into Arena!
         // ---------------------------------------------------------------------
         if (this._state === 'arena_enter') {
             if (this._arenaDiveStarted)
@@ -1186,15 +1462,17 @@ export class PetActor {
             }
 
             const dx = this._arenaTargetX - this._x;
-            // Brisk sprint speed so even far-edge pets arrive in <= 0.95s!
-            const step = Math.max(9.5, Math.abs(dx) * 0.14);
-            if (Math.abs(dx) <= 14 || this._statePhaseMs >= 950) {
+            const dy = bounds.groundY - this._y;
+            const stepX = Math.max(9.5, Math.abs(dx) * 0.15);
+            const stepY = Math.max(10.5, Math.abs(dy) * 0.16);
+
+            if ((Math.abs(dx) <= 14 && Math.abs(dy) <= 14) || this._statePhaseMs >= 950) {
                 this._arenaDiveStarted = true;
                 this._x = this._arenaTargetX;
+                this._y = bounds.groundY;
                 this._applyPosition();
                 this._effects.spawnParticle(this._x + this._petW / 2, this._y + 4, '💨', 14);
 
-                // Leap up slightly then dive downward into the Arena right below Top-Center!
                 this._actor.ease({
                     y: Math.round(this._y + 34),
                     opacity: 0,
@@ -1211,11 +1489,51 @@ export class PetActor {
                 return;
             }
 
-            this._facing = dx > 0 ? 'right' : 'left';
-            this._x += dx > 0 ? Math.min(dx, step) : Math.max(dx, -step);
+            this._facing = dx >= 0 ? 'right' : 'left';
+            this._x += dx > 0 ? Math.min(dx, stepX) : Math.max(dx, -stepX);
+            this._y += dy > 0 ? Math.min(dy, stepY) : Math.max(dy, -stepY);
             this._advanceSpriteAnimation(dtMs, 2.2);
             this._applyPosition();
             return;
+        }
+
+        // Maintain surface Y tracking when walking on Top Bar, Window Ledge, or Screen Floor!
+        if (freeRoam && this._state !== 'drag') {
+            if (this._roamSurface === 'topbar') {
+                this._y = bounds.groundY;
+            } else if (this._roamSurface === 'floor') {
+                this._y = bounds.bottomGroundY;
+            } else if (this._roamSurface === 'ledge' && this._activeLedge) {
+                const mw = this._activeLedge.metaWin;
+                let valid = false;
+                try {
+                    if (mw && !mw.minimized && mw.get_compositor_private?.()?.visible !== false) {
+                        const r = mw.get_frame_rect();
+                        const newY = Math.round(r.y - this._petH + 4);
+                        const x1 = Math.max(bounds.minX, Math.round(r.x + 8));
+                        const x2 = Math.min(bounds.maxX, Math.round(r.x + r.width - this._petW - 8));
+                        if (x2 - x1 >= 48 && newY >= bounds.groundY + 24 && newY <= bounds.bottomGroundY - 20) {
+                            // Ride smoothly along if user drags the window!
+                            const prevX1 = this._activeLedge.x1;
+                            this._x = Math.max(x1, Math.min(x2, this._x + (x1 - prevX1)));
+                            this._activeLedge.x1 = x1;
+                            this._activeLedge.x2 = x2;
+                            this._activeLedge.y = newY;
+                            this._y = newY;
+                            valid = true;
+                        }
+                    }
+                } catch (_e) {
+                    valid = false;
+                }
+
+                if (!valid) {
+                    // Window closed, minimized, or moved off-bounds -> open parachute non-destructively!
+                    this._activeLedge = null;
+                    this.say('哎呀窗口挪走啦，开小降落伞飘下去~ 🪂', 2000);
+                    this._startParachuteDive(bounds);
+                }
+            }
         }
 
         // Standard vertical jump gravity
@@ -1243,25 +1561,36 @@ export class PetActor {
 
         const userSpeed = this._settings.get_double('walk-speed');
         const dirSign = this._facing === 'right' ? 1 : -1;
+        const surfMinX = (freeRoam && this._roamSurface === 'ledge' && this._activeLedge)
+            ? this._activeLedge.x1
+            : bounds.minX;
+        const surfMaxX = (freeRoam && this._roamSurface === 'ledge' && this._activeLedge)
+            ? this._activeLedge.x2
+            : bounds.maxX;
 
         // ---------------------------------------------------------------------
         // State Machine: Rich Icon Interactions, Duo Choreographies & Stunts!
         // ---------------------------------------------------------------------
         if (this._state === 'raid_widget' && this._activeTarget) {
-            const target = this._activeTarget;
-            const approachX = target.x + target.w / 2 >= this._x + this._petW / 2
-                ? Math.max(bounds.minX, target.x - Math.round(this._petW * 0.5))
-                : Math.min(bounds.maxX, target.x + target.w - Math.round(this._petW * 0.5));
-            const dx = approachX - this._x;
-
-            if (Math.abs(dx) <= 10) {
-                this._widgetCooldowns.set(target.actor, Date.now());
-                this._facing = target.x + target.w / 2 >= this._x + this._petW / 2 ? 'right' : 'left';
-                this._triggerRandomWidgetBehavior(target, bounds);
+            if (freeRoam && this._roamSurface !== 'topbar') {
+                this._activeTarget = null;
+                this._setState('walk', 4000);
             } else {
-                this._facing = dx > 0 ? 'right' : 'left';
-                const step = Math.min(Math.abs(dx), 2.8 * Math.max(0.7, userSpeed));
-                this._x += dx > 0 ? step : -step;
+                const target = this._activeTarget;
+                const approachX = target.x + target.w / 2 >= this._x + this._petW / 2
+                    ? Math.max(bounds.minX, target.x - Math.round(this._petW * 0.5))
+                    : Math.min(bounds.maxX, target.x + target.w - Math.round(this._petW * 0.5));
+                const dx = approachX - this._x;
+
+                if (Math.abs(dx) <= 10) {
+                    this._widgetCooldowns.set(target.actor, Date.now());
+                    this._facing = target.x + target.w / 2 >= this._x + this._petW / 2 ? 'right' : 'left';
+                    this._triggerRandomWidgetBehavior(target, bounds);
+                } else {
+                    this._facing = dx > 0 ? 'right' : 'left';
+                    const step = Math.min(Math.abs(dx), 2.8 * Math.max(0.7, userSpeed));
+                    this._x += dx > 0 ? step : -step;
+                }
             }
         } else if (this._state === 'attack') {
             const cycleMs = this._statePhaseMs % 560;
@@ -1326,17 +1655,15 @@ export class PetActor {
                 this._actor.rotation_angle_z = Math.sin(rec * Math.PI * 4) * 10;
             }
         } else if (this._state === 'backflip_off' || this._state === 'solo_backflip') {
-            const dur = Math.max(1, this._stateTimerMs + this._statePhaseMs);
             const prog = Math.min(1, this._statePhaseMs / 860);
             if (this._state === 'backflip_off')
                 this._x += -dirSign * 1.5;
-            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, this._x));
+            this._x = Math.max(surfMinX, Math.min(surfMaxX, this._x));
             this._actor.rotation_angle_z = -360 * prog * dirSign;
             if (prog >= 1 && this._jumpY === 0) {
                 this._resetPoseTransform();
                 this._setState('happy', 650);
             }
-            void dur;
         } else if (this._state === 'sit_polish') {
             const sway = Math.sin((this._statePhaseMs / 220) * Math.PI);
             this._lungeX = sway * 4;
@@ -1351,8 +1678,8 @@ export class PetActor {
                 this._x += dirSign * 4.4 * Math.max(0.8, userSpeed);
                 this._actor.set_scale(1.14, 0.88);
                 this._actor.rotation_angle_z = 7 * dirSign;
-                if (this._x <= bounds.minX + 12 || this._x >= bounds.maxX - 12)
-                    this._facing = this._x <= bounds.minX + 12 ? 'right' : 'left';
+                if (this._x <= surfMinX + 12 || this._x >= surfMaxX - 12)
+                    this._facing = this._x <= surfMinX + 12 ? 'right' : 'left';
             } else {
                 // Brake skid!
                 if (!this._stuntTriggered) {
@@ -1364,7 +1691,7 @@ export class PetActor {
                 this._actor.set_scale(1.16, 0.76);
                 this._actor.rotation_angle_z = -14 * dirSign * decel;
             }
-            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, this._x));
+            this._x = Math.max(surfMinX, Math.min(surfMaxX, this._x));
         } else if (this._state === 'screen_knock') {
             const beat = (this._statePhaseMs % 420) / 420;
             const tap = Math.sin(beat * Math.PI);
@@ -1376,7 +1703,7 @@ export class PetActor {
                 this._effects.spawnParticle(this._x + this._petW / 2, this._y + 4, '✨', 14);
             }
         } else if (this._state === 'edge_peek') {
-            const leanDir = this._x <= bounds.minX + 16 ? -1 : 1;
+            const leanDir = this._x <= surfMinX + 16 ? -1 : 1;
             this._facing = leanDir > 0 ? 'right' : 'left';
             this._lungeX = leanDir * 5;
             this._actor.rotation_angle_z = leanDir * 18 * Math.sin(Math.min(1, this._statePhaseMs / 450) * (Math.PI / 2));
@@ -1396,7 +1723,7 @@ export class PetActor {
             this._actor.rotation_angle_z = 0;
         } else if (this._state === 'duo_leapfrog_jumper' && this._duoData) {
             this._x += dirSign * 3.5;
-            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, this._x));
+            this._x = Math.max(surfMinX, Math.min(surfMaxX, this._x));
             this._actor.rotation_angle_z = 14 * dirSign * (this._jumpY < 0 ? 1 : 0);
         } else if (this._state === 'duo_sync_dance') {
             const beatIdx = Math.floor(this._statePhaseMs / 380);
@@ -1470,6 +1797,161 @@ export class PetActor {
                 this._resetPoseTransform();
                 this._setState('walk', 4000);
             }
+        } else if (this._state === 'parachute_glide') {
+            const sway = Math.sin((this._statePhaseMs / 380) * Math.PI);
+            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, this._x + sway * 1.4));
+            this._facing = sway >= 0 ? 'right' : 'left';
+            this._actor.rotation_angle_z = sway * 11;
+            const prevY = this._y;
+            this._y += 2.15;
+
+            // Check if gliding past an open window titlebar ledge!
+            const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+            let landedLedge = null;
+            for (const l of ledges) {
+                if (this._x >= l.x1 && this._x <= l.x2 && prevY <= l.y && this._y >= l.y) {
+                    landedLedge = l;
+                    break;
+                }
+            }
+
+            if (landedLedge && Math.random() < 0.72) {
+                this._clearPropBadge();
+                this._resetPoseTransform();
+                this._y = landedLedge.y;
+                this._roamSurface = 'ledge';
+                this._activeLedge = landedLedge;
+                this._jump(-3.2);
+                this._setState('happy', 1100);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y + 4, '🐾', 14);
+                this.say(`降落在「${landedLedge.appName}」窗口顶上歇会儿 🪂🐾`, 2200);
+            } else if (this._y >= bounds.bottomGroundY) {
+                this._clearPropBadge();
+                this._resetPoseTransform();
+                this._y = bounds.bottomGroundY;
+                this._roamSurface = 'floor';
+                this._activeLedge = null;
+                this._jump(-3.4);
+                this._setState('happy', 1000);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y + 6, '💨', 14);
+            }
+        } else if (this._state === 'free_fall') {
+            const prevY = this._y;
+            this._fallVy = Math.min(11, this._fallVy + 0.55);
+            this._y += this._fallVy;
+
+            const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+            let hitLedge = null;
+            for (const l of ledges) {
+                if (this._x >= l.x1 && this._x <= l.x2 && prevY <= l.y && this._y >= l.y) {
+                    hitLedge = l;
+                    break;
+                }
+            }
+
+            if (hitLedge) {
+                this._fallVy = 0;
+                this._y = hitLedge.y;
+                this._roamSurface = 'ledge';
+                this._activeLedge = hitLedge;
+                this._jump(-3.2);
+                this._setState('happy', 950);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y + 6, '💨', 14);
+            } else if (this._y >= bounds.bottomGroundY) {
+                this._fallVy = 0;
+                this._y = bounds.bottomGroundY;
+                this._roamSurface = 'floor';
+                this._activeLedge = null;
+                this._jump(-3.6);
+                this._setState('happy', 950);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y + 6, '💨', 14);
+            }
+        } else if (this._state === 'balloon_ascend') {
+            let targetLedge = this._ascendLedge;
+            if (targetLedge?.metaWin) {
+                let ledgeAlive = false;
+                try {
+                    const mw = targetLedge.metaWin;
+                    if (!mw.minimized && mw.get_compositor_private?.()?.visible !== false) {
+                        const r = mw.get_frame_rect();
+                        const newY = Math.round(r.y - this._petH + 4);
+                        const x1 = Math.max(bounds.minX, Math.round(r.x + 8));
+                        const x2 = Math.min(bounds.maxX, Math.round(r.x + r.width - this._petW - 8));
+                        if (x2 - x1 >= 48 && newY >= bounds.groundY + 24 && newY <= bounds.bottomGroundY - 20) {
+                            targetLedge.x1 = x1;
+                            targetLedge.x2 = x2;
+                            targetLedge.y = newY;
+                            this._ascendTargetY = newY;
+                            ledgeAlive = true;
+                        }
+                    }
+                } catch (_e) {
+                    ledgeAlive = false;
+                }
+                if (!ledgeAlive) {
+                    targetLedge = null;
+                    this._ascendLedge = null;
+                    this._ascendTargetY = bounds.groundY;
+                }
+            }
+
+            const destX = targetLedge
+                ? Math.max(targetLedge.x1, Math.min(targetLedge.x2, this._x))
+                : this._x;
+            const dx = destX - this._x;
+            if (Math.abs(dx) > 2) {
+                this._facing = dx > 0 ? 'right' : 'left';
+                this._x += Math.sign(dx) * Math.min(Math.abs(dx), 2.4);
+            }
+            const sway = Math.sin((this._statePhaseMs / 320) * Math.PI);
+            this._actor.rotation_angle_z = sway * 8;
+            this._y -= 2.75;
+
+            if (this._y <= this._ascendTargetY) {
+                this._clearPropBadge();
+                this._resetPoseTransform();
+                this._y = this._ascendTargetY;
+                if (targetLedge) {
+                    this._roamSurface = 'ledge';
+                    this._activeLedge = targetLedge;
+                } else {
+                    this._roamSurface = 'topbar';
+                    this._activeLedge = null;
+                }
+                this._ascendLedge = null;
+                this._jump(-3.4);
+                this._setState('happy', 1000);
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y, '✨', 16);
+            }
+        } else if (this._state === 'wall_climb') {
+            const onLeftWall = Math.abs(this._x - bounds.minX) <= 18;
+            this._x = onLeftWall ? bounds.minX : bounds.maxX;
+            this._facing = onLeftWall ? 'right' : 'left';
+            // Tilt paws onto the vertical screen bezel!
+            this._actor.rotation_angle_z = (onLeftWall ? -78 : 78) + Math.sin((this._statePhaseMs / 150) * Math.PI) * 6;
+            this._y += this._climbDirY * 2.1 * Math.max(0.7, userSpeed);
+
+            this._sneakFootstepAccMs += dtMs;
+            if (this._sneakFootstepAccMs >= 650) {
+                this._sneakFootstepAccMs = 0;
+                this._effects.spawnParticle(this._x + this._petW / 2, this._y + this._petH / 2, '🐾', 10);
+            }
+
+            if (this._y <= bounds.groundY) {
+                this._y = bounds.groundY;
+                this._roamSurface = 'topbar';
+                this._resetPoseTransform();
+                this._facing = onLeftWall ? 'right' : 'left';
+                this._jump(-4.0);
+                this._setState('walk', 4500);
+            } else if (this._y >= bounds.bottomGroundY) {
+                this._y = bounds.bottomGroundY;
+                this._roamSurface = 'floor';
+                this._resetPoseTransform();
+                this._facing = onLeftWall ? 'right' : 'left';
+                this._jump(-4.0);
+                this._setState('walk', 4500);
+            }
         } else if (this._state === 'peek') {
             this._actor.rotation_angle_z = Math.sin((this._statePhaseMs / 350) * Math.PI) * 9;
         } else if (this._state === 'walk' || this._state === 'run') {
@@ -1477,29 +1959,49 @@ export class PetActor {
             const pxPerTick = 1.05 * userSpeed * mult * cpuFactor;
             this._x += this._facing === 'right' ? pxPerTick : -pxPerTick;
 
-            if (this._x <= bounds.minX) {
-                this._x = bounds.minX;
-                if (Math.random() < 0.35) {
+            if (this._x <= surfMinX) {
+                this._x = surfMinX;
+                if (freeRoam && this._roamSurface !== 'ledge' && Math.random() < 0.30) {
+                    this._startWallClimb(bounds);
+                } else if (freeRoam && this._roamSurface === 'ledge' && Math.random() < 0.28) {
+                    this._startParachuteDive(bounds);
+                } else if (Math.random() < 0.32) {
                     this._setState('edge_peek', 1450);
-                    if (Math.random() < 0.5)
-                        this.say('哇，屏幕最左边下面好高呀 👀', 2000);
+                    if (Math.random() < 0.5) {
+                        this.say(
+                            this._roamSurface === 'ledge' && this._activeLedge
+                                ? `趴在「${this._activeLedge.appName}」窗口边往下看 👀`
+                                : '哇，屏幕最左边好酷呀 👀',
+                            2000
+                        );
+                    }
                 } else {
                     this._facing = 'right';
                 }
-            } else if (this._x >= bounds.maxX) {
-                this._x = bounds.maxX;
-                if (Math.random() < 0.35) {
+            } else if (this._x >= surfMaxX) {
+                this._x = surfMaxX;
+                if (freeRoam && this._roamSurface !== 'ledge' && Math.random() < 0.30) {
+                    this._startWallClimb(bounds);
+                } else if (freeRoam && this._roamSurface === 'ledge' && Math.random() < 0.28) {
+                    this._startParachuteDive(bounds);
+                } else if (Math.random() < 0.32) {
                     this._setState('edge_peek', 1450);
-                    if (Math.random() < 0.5)
-                        this.say('趴在右上角边边往下瞄一眼 👀', 2000);
+                    if (Math.random() < 0.5) {
+                        this.say(
+                            this._roamSurface === 'ledge' && this._activeLedge
+                                ? `坐在「${this._activeLedge.appName}」窗口右上角吹风~ ✨`
+                                : '趴在最右边边往下瞄一眼 👀',
+                            2000
+                        );
+                    }
                 } else {
                     this._facing = 'left';
                 }
-            } else {
+            } else if (!freeRoam || this._roamSurface === 'topbar') {
                 this._checkPanelEncounter(bounds, false);
             }
         } else if (this._state !== 'drag') {
-            this._x = Math.max(bounds.minX, Math.min(bounds.maxX, this._x));
+            this._x = Math.max(surfMinX, Math.min(surfMaxX, this._x));
         }
 
         if (this._state !== 'drag') {
@@ -1538,6 +2040,8 @@ export class PetActor {
             case 'backflip_off':
             case 'solo_backflip':
             case 'duo_leapfrog_jumper':
+            case 'wall_climb':
+            case 'free_fall':
                 return 'run';
             case 'zoomies_skid':
                 return this._statePhaseMs < 1050 ? 'run' : 'crouch';
@@ -1547,6 +2051,8 @@ export class PetActor {
                 return 'crouch';
             case 'duo_spar_clash':
                 return this._statePhaseMs < 550 ? 'attack' : 'guard';
+            case 'parachute_glide':
+            case 'balloon_ascend':
             case 'duo_high_five':
             case 'duo_sync_dance':
             case 'duo_nuzzle':
@@ -1577,20 +2083,32 @@ export class PetActor {
     }
 
     _pickNextAutonomousState(bounds) {
+        this._clearPropBadge();
         this._resetPoseTransform();
         this._stuntTriggered = false;
         this._lastHitComboStep = -1;
+
+        // If wall-climbing finished mid-wall, glide gently to a ledge or floor!
+        if (this._state === 'wall_climb' && this._roamSurface === 'air') {
+            this._startParachuteDive(bounds);
+            return;
+        }
 
         const nonWalkStates = [
             'attack', 'headbutt_ram', 'backflip_off', 'sit_polish', 'sneak', 'hurdle', 'peek',
             'happy', 'cast', 'solo_backflip', 'zoomies_skid', 'screen_knock', 'edge_peek',
             'duo_high_five', 'duo_leapfrog_base', 'duo_leapfrog_jumper', 'duo_sync_dance',
             'duo_spar_clash', 'duo_gossip', 'duo_nuzzle',
+            'parachute_glide', 'balloon_ascend', 'free_fall',
         ];
 
         if (nonWalkStates.includes(this._state)) {
-            if (this._state === 'edge_peek')
-                this._facing = this._x <= bounds.minX + 20 ? 'right' : 'left';
+            if (this._state === 'edge_peek') {
+                const edgeMinX = (this.isFreeRoamEnabled() && this._roamSurface === 'ledge' && this._activeLedge)
+                    ? this._activeLedge.x1
+                    : bounds.minX;
+                this._facing = this._x <= edgeMinX + 20 ? 'right' : 'left';
+            }
             this._activeTarget = null;
             this._duoData = null;
             this._sneakExitX = null;
@@ -1600,9 +2118,41 @@ export class PetActor {
             return;
         }
 
+        const freeRoam = this.isFreeRoamEnabled();
+
+        // Full-Screen Vertical Exploration Transitions (Parachute / Balloon / Window Perch / Wall Climb)!
+        if (freeRoam && bounds) {
+            const vRoll = Math.random();
+            const ledges = this._perception?.scanWindowLedges?.(this._petW, this._petH, bounds) || [];
+
+            if (this._roamSurface === 'topbar' && vRoll < 0.28) {
+                this._startParachuteDive(bounds);
+                return;
+            }
+            if (this._roamSurface === 'floor' && vRoll < 0.30) {
+                const pickLedge = ledges.length > 0 && Math.random() < 0.65 ? pick(ledges) : null;
+                this._startBalloonAscent(bounds, pickLedge);
+                return;
+            }
+            if (this._roamSurface === 'ledge') {
+                if (vRoll < 0.22 && this._activeLedge) {
+                    // Non-destructive window inspection while perched on its titlebar!
+                    this._setState('peek', 2100);
+                    this.say(`趴在「${this._activeLedge.appName}」窗口顶上看看主人在忙啥 👀✨`, 2300);
+                    return;
+                } else if (vRoll < 0.40) {
+                    if (Math.random() < 0.5)
+                        this._startBalloonAscent(bounds, null);
+                    else
+                        this._startParachuteDive(bounds);
+                    return;
+                }
+            }
+        }
+
         const r = Math.random();
-        // 18% chance to actively seek out a Top-Bar icon to interact with!
-        if (r < 0.18 && this._perception) {
+        // Seek out a Top-Bar icon when walking on the Top Bar!
+        if ((!freeRoam || this._roamSurface === 'topbar') && r < 0.18 && this._perception) {
             const targets = this._perception.scanLiveTargets();
             if (targets.length > 0) {
                 this._activeTarget = pick(targets);
@@ -1611,7 +2161,7 @@ export class PetActor {
             }
         }
 
-        // 15% chance to perform a spontaneous solo stunt / trick!
+        // Perform a spontaneous solo stunt / trick on any surface!
         if (r < 0.33 && bounds) {
             this._triggerSoloStunt(bounds);
             return;
@@ -1651,9 +2201,15 @@ export class PetActor {
     _applyPosition() {
         if (!this._actor || !Number.isFinite(this._x) || !Number.isFinite(this._y))
             return;
-        this._actor.set_position(
-            Math.round(this._x + (this._lungeX || 0)),
-            Math.round(this._y + (this._jumpY || 0))
-        );
+        const drawX = Math.round(this._x + (this._lungeX || 0));
+        const drawY = Math.round(this._y + (this._jumpY || 0));
+        this._actor.set_position(drawX, drawY);
+
+        if (this._propBadge) {
+            this._propBadge.set_position(
+                Math.round(drawX + this._petW / 2 - 9),
+                Math.max(0, Math.round(drawY - 18))
+            );
+        }
     }
 }

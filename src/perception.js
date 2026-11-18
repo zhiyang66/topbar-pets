@@ -271,4 +271,128 @@ export class DesktopPerception {
         }
         return null;
     }
+
+    /**
+     * Compute full-screen & top-bar roam boundaries for the primary monitor,
+     * respecting top panel and bottom dock / workArea cleanly!
+     */
+    getScreenRoamBounds(petW = 38, petH = 38, vOffset = 4) {
+        const panelBox = Main.layoutManager?.panelBox;
+        if (!panelBox || !panelBox.get_stage?.())
+            return null;
+
+        const mon = Main.layoutManager?.primaryMonitor;
+        const monIdx = Main.layoutManager?.primaryIndex ?? -1;
+        const monitors = Main.layoutManager?.monitors;
+        let workArea = null;
+        if (mon && Array.isArray(monitors) && monIdx >= 0 && monIdx < monitors.length) {
+            try {
+                workArea = Main.layoutManager?.getWorkAreaForMonitor?.(monIdx) || null;
+            } catch (_e) {
+                workArea = null;
+            }
+        }
+
+        const monX = Number.isFinite(mon?.x) ? mon.x : (Number.isFinite(panelBox.x) ? panelBox.x : 0);
+        const monY = Number.isFinite(mon?.y) ? mon.y : (Number.isFinite(panelBox.y) ? panelBox.y : 0);
+        const monW = (Number.isFinite(mon?.width) && mon.width > 64)
+            ? mon.width
+            : ((Number.isFinite(panelBox.width) && panelBox.width > 64) ? panelBox.width : (global.stage?.width || 0));
+        const monH = (Number.isFinite(mon?.height) && mon.height > 120)
+            ? mon.height
+            : (global.stage?.height || 768);
+
+        if (monW <= 64)
+            return null;
+
+        const py = Number.isFinite(panelBox.y) ? panelBox.y : monY;
+        const ph = (Number.isFinite(panelBox.height) && panelBox.height > 12) ? panelBox.height : 32;
+        const groundY = Math.max(0, py + ph - petH + vOffset);
+
+        const bottomLimit = (workArea && Number.isFinite(workArea.y) && Number.isFinite(workArea.height) && workArea.height > 120)
+            ? (workArea.y + workArea.height)
+            : (monY + monH);
+        const bottomGroundY = Math.max(groundY + 60, bottomLimit - petH);
+
+        const minX = monX + 6;
+        const maxX = Math.max(minX + 16, monX + monW - petW - 6);
+
+        return {
+            minX,
+            maxX,
+            groundY,       // Top-Bar ground Y
+            bottomGroundY, // Full-screen floor Y (above Ubuntu bottom dock if any)
+            panelY: py,
+            panelH: ph,
+            monX,
+            monY,
+            monW,
+            monH,
+        };
+    }
+
+    /**
+     * Read-only scan of visible normal window titlebar ledges on the active workspace
+     * so pets can hop onto, stroll along, and peek into open windows non-destructively!
+     */
+    scanWindowLedges(petW = 38, petH = 38, bounds = null) {
+        const ledges = [];
+        if (!bounds || !global.get_window_actors)
+            return ledges;
+
+        let activeWs = null;
+        try {
+            activeWs = global.workspace_manager?.get_active_workspace?.() || null;
+        } catch (_e) {
+            activeWs = null;
+        }
+
+        const actors = global.get_window_actors();
+        // Walk from top-most window downward, collecting up to 6 clean horizontal ledges
+        for (let i = actors.length - 1; i >= 0 && ledges.length < 6; i--) {
+            const winActor = actors[i];
+            if (!winActor || !winActor.visible)
+                continue;
+            const metaWin = winActor.meta_window;
+            if (!metaWin)
+                continue;
+
+            try {
+                if (metaWin.get_window_type() !== Meta.WindowType.NORMAL)
+                    continue;
+                if (metaWin.minimized)
+                    continue;
+                if (activeWs && metaWin.get_workspace?.() !== activeWs && !metaWin.is_on_all_workspaces?.())
+                    continue;
+
+                const rect = metaWin.get_frame_rect();
+                if (!rect || rect.width < 160 || rect.height < 90)
+                    continue;
+
+                const ledgeY = Math.round(rect.y - petH + 4);
+                // Only expose titlebars that sit comfortably between Top Bar and Screen Floor
+                if (ledgeY < bounds.groundY + 38 || ledgeY > bounds.bottomGroundY - 34)
+                    continue;
+
+                const x1 = Math.max(bounds.minX, Math.round(rect.x + 8));
+                const x2 = Math.min(bounds.maxX, Math.round(rect.x + rect.width - petW - 8));
+                if (x2 - x1 < 64)
+                    continue;
+
+                const appName = this._resolveWindowAppName(metaWin) || '应用窗口';
+                ledges.push({
+                    metaWin,
+                    appName,
+                    x1,
+                    x2,
+                    y: ledgeY,
+                    winRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                });
+            } catch (_e) {
+                // Ignore transient destroyed windows
+            }
+        }
+
+        return ledges;
+    }
 }

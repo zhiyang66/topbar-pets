@@ -1,6 +1,6 @@
 import GLib from 'gi://GLib';
 
-export const MAX_ADOPTED_PETS = 3;
+export const MAX_ADOPTED_PETS = Infinity;
 
 export const SPECIES_PRESETS = [
     { id: 'cat', label: '🐱 像素橘猫', defaultName: '团子', defaultArchetype: 'martial' },
@@ -266,9 +266,7 @@ export class RosterManager {
             if (raw) {
                 const parsed = JSON.parse(raw);
                 if (Array.isArray(parsed.pets) && parsed.pets.length > 0) {
-                    this.pets = parsed.pets
-                        .slice(0, MAX_ADOPTED_PETS)
-                        .map(p => createNewPetRecord(p));
+                    this.pets = parsed.pets.map(p => createNewPetRecord(p));
                     this.primaryPetId = parsed.primaryPetId || this.pets[0].id;
                     if (!this.pets.some(p => p.id === this.primaryPetId))
                         this.primaryPetId = this.pets[0].id;
@@ -331,8 +329,22 @@ export class RosterManager {
         return true;
     }
 
+    setPetVisible(petId, visible) {
+        const pet = this.getPetById(petId);
+        if (!pet)
+            return false;
+        const nextVal = Boolean(visible);
+        if (Boolean(pet.onTopBar !== false) === nextVal)
+            return true;
+        pet.onTopBar = nextVal;
+        this.save();
+        if (this._callbacks.onRosterStructureChanged)
+            this._callbacks.onRosterStructureChanged();
+        return true;
+    }
+
     canAdoptMore() {
-        return this.pets.length < MAX_ADOPTED_PETS;
+        return true;
     }
 
     adoptPet(opts = {}) {
